@@ -25,14 +25,14 @@
 #include <time.h>
 #include <getopt.h>
 
-#define DEV_NAME 	"/dev/i2c-1"
-#define PAGE_SIZE 	128 /* bytes in page mode I2C transfer, 128 for MCU */
+#define DEV_NAME	"/dev/i2c-1"
+#define PAGE_SIZE	128 /* bytes in page mode I2C transfer, 128 for MCU */
 #define ADDR_SIZE	2 /* 2 bytes address length in I2C transfer */
-#define DEV_ADDR_BOOT 	0x2c /* 0x2c for MCU in bootloader */
-#define DEV_ADDR_APP 	0x2a /* 0x2a for MCU in application */
-#define FLASH_SIZE 	43008 /* flash size, 42k for MCU */
-#define WRITE_DELAY 	20 /* ms */
-#define RETRY 		3
+#define DEV_ADDR_BOOT	0x2c /* 0x2c for MCU in bootloader */
+#define DEV_ADDR_APP	0x2a /* 0x2a for MCU in application */
+#define FLASH_SIZE	43008 /* flash size, 42k for MCU */
+#define WRITE_DELAY	20 /* ms */
+#define RETRY		3
 
 #define FILE_CMP_OK	0xBB /* bootloader flash protocol code: flash OK */
 #define FILE_CMP_ERROR	0xDD /* bootloader flash protocol code: flash failed */
@@ -72,24 +72,24 @@ static void set_addr(char buf[], int addr)
 static void writebuff(char *buff, int startaddr, int len)
 {
 	int size, offset, fd, r, w;
-	char b[PAGE_SIZE+ADDR_SIZE];
+	char b[PAGE_SIZE + ADDR_SIZE];
 
 	fd = open_i2c(DEV_ADDR_BOOT);
 
 	printf("Writing data ");
 	fflush(stdout);
-	for (offset=0; offset<len; offset+=PAGE_SIZE) {
-		set_addr(b, startaddr+offset);
-		size = len-offset < PAGE_SIZE ? len-offset : PAGE_SIZE;
+	for (offset = 0; offset < len; offset += PAGE_SIZE) {
+		set_addr(b, startaddr + offset);
+		size = len - offset < PAGE_SIZE ? len - offset : PAGE_SIZE;
 
-		memcpy(b+ADDR_SIZE, buff+offset, size);
+		memcpy(b + ADDR_SIZE, buff + offset, size);
 
-		for (r=1; r <= RETRY; r++) {
-			w = write(fd, b, size+ADDR_SIZE);
-			nanosleep((const struct timespec[]){{0,
-					(WRITE_DELAY*1000000L)}}, NULL);
+		for (r = 1; r <= RETRY; r++) {
+			w = write(fd, b, size + ADDR_SIZE);
+			nanosleep((const struct timespec[]){{0, (WRITE_DELAY*1000000L)}},
+				  NULL);
 
-			if (w != size+ADDR_SIZE) {
+			if (w != size + ADDR_SIZE) {
 				if (r == RETRY) {
 					perror("I2C write operation failed");
 					exit(EXIT_FAILURE);
@@ -110,27 +110,27 @@ static void writebuff(char *buff, int startaddr, int len)
 
 static int readbuff(char *buff, int startaddr, int len)
 {
-	int size, offset, fd, rb, readtotal=0;
-        char b[ADDR_SIZE];
+	int size, offset, fd, rb, readtotal = 0;
+	char b[ADDR_SIZE];
 
 	fd = open_i2c(DEV_ADDR_BOOT);
 
-        for (offset=0; offset<len; offset+=PAGE_SIZE) {
-		set_addr(b, startaddr+offset);
-		size = len-offset < PAGE_SIZE ? len-offset : PAGE_SIZE;
+	for (offset = 0; offset < len; offset += PAGE_SIZE) {
+		set_addr(b, startaddr + offset);
+		size = len - offset < PAGE_SIZE ? len - offset : PAGE_SIZE;
 
 		if (write(fd, b, ADDR_SIZE) != 2) {
-                        perror("I2C write operation failed");
-                        exit(EXIT_FAILURE);
-                }
-	
-		rb = read(fd, buff+offset, size);
+			perror("I2C write operation failed");
+			exit(EXIT_FAILURE);
+		}
+
+		rb = read(fd, buff + offset, size);
 		if (rb < 0) {
 			perror("I2C read operation failed");
 			exit(EXIT_FAILURE);
 		}
 
-		readtotal+=rb;
+		readtotal += rb;
 
 		printf("r");
 		fflush(stdout);
@@ -155,7 +155,7 @@ static void read_version(char version[], char cmd)
 
 	if (write(fd, &cmd, 1) != 1) {
 		perror("I2C write operation failed");
-	        exit(EXIT_FAILURE);
+		exit(EXIT_FAILURE);
 	}
 
 	rb = read(fd, version, VERSION_HASHLEN);
@@ -171,9 +171,9 @@ static void print_version(char version[])
 {
 	int i;
 	for (i = 0; i < VERSION_HASHLEN; i++)
-                printf("%02x", version[i]);
+		printf("%02x", version[i]);
 
-        printf("\n");
+	printf("\n");
 }
 
 static void print_app_version(void)
@@ -214,7 +214,7 @@ static void goto_bootloader(void)
 
 	if (write(fd, cmd, 3) != 3) {
 		perror("I2C write operation failed");
-	        exit(EXIT_FAILURE);
+		exit(EXIT_FAILURE);
 	}
 
 	close(fd);
@@ -232,7 +232,7 @@ static void flash_file(char *filename)
 		exit(EXIT_FAILURE);
 	}
 
-	if((size=read(fd, buff, FLASH_SIZE))<=0) {
+	if ((size = read(fd, buff, FLASH_SIZE)) <= 0) {
 		perror("Failed to read file");
 		exit(EXIT_FAILURE);
 	}
@@ -272,24 +272,23 @@ int main(int argc, char *argv[])
 
 	opt = getopt(argc, argv, "hvf:r:");
 	switch (opt) {
-		case 'h':
-			usage();
-			break;
-		case 'v':
-			print_bootloader_version();
-			print_app_version();
-			break;
-		case 'f':
-			goto_bootloader();
-		case 'r':
-			flash_file(optarg);
-			printf("Writing finished. Please reboot!\n");
-			break;
-		default:
-			printf("Unknown option.\n\n");
-			usage();
+	case 'h':
+		usage();
+		break;
+	case 'v':
+		print_bootloader_version();
+		print_app_version();
+		break;
+	case 'f':
+		goto_bootloader();
+	case 'r':
+		flash_file(optarg);
+		printf("Writing finished. Please reboot!\n");
+		break;
+	default:
+		printf("Unknown option.\n\n");
+		usage();
 	}
 
 	return EXIT_SUCCESS;
 }
-
