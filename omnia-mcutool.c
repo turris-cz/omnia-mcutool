@@ -4,7 +4,7 @@
  * the git hashes compiled into the images) and flash application image
  * to the MCU EEPROM.
  *
- * Copyright (C) 2016 CZ.NIC
+ * Copyright (C) 2016, 2022 CZ.NIC
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -46,7 +46,7 @@
 #define BOOTLOADER_TRANS_DELAY	1 /* Bootloader transition delay */
 
 
-int open_i2c(int addr) {
+static int open_i2c(int addr) {
 	int fd;
 
 	if ((fd = open(DEV_NAME, O_RDWR)) < 0) {
@@ -62,12 +62,12 @@ int open_i2c(int addr) {
 	return fd;
 }
 
-void set_addr(char buf[], int addr) {
+static void set_addr(char buf[], int addr) {
 	buf[0] = (addr & 0xFF00) >> 8;
 	buf[1] = (addr & 0xFF);
 }
 
-void writebuff(char *buff, int startaddr, int len) {
+static void writebuff(char *buff, int startaddr, int len) {
 	int size, offset, fd, r, w;
 	char b[PAGE_SIZE+ADDR_SIZE];
 
@@ -105,7 +105,7 @@ void writebuff(char *buff, int startaddr, int len) {
 	fflush(stdout);
 }
 
-int readbuff(char *buff, int startaddr, int len) {
+static int readbuff(char *buff, int startaddr, int len) {
 	int size, offset, fd, rb, readtotal=0;
         char b[ADDR_SIZE];
 
@@ -143,7 +143,7 @@ int readbuff(char *buff, int startaddr, int len) {
 	return readtotal;
 }
 
-void read_version(char version[], char cmd) {
+static void read_version(char version[], char cmd) {
 	int rb, fd;
 
 	fd = open_i2c(DEV_ADDR_APP);
@@ -162,7 +162,7 @@ void read_version(char version[], char cmd) {
 	close(fd);
 }
 
-void print_version(char version[]) {
+static void print_version(char version[]) {
 	int i;
 	for (i = 0; i < VERSION_HASHLEN; i++)
                 printf("%02x", version[i]);
@@ -170,7 +170,7 @@ void print_version(char version[]) {
         printf("\n");
 }
 
-void print_app_version(void) {
+static void print_app_version(void) {
 	char buf[VERSION_HASHLEN];
 
 	read_version(buf, CMD_VERSION_APP);
@@ -178,7 +178,7 @@ void print_app_version(void) {
 	print_version(buf);
 }
 
-void print_bootloader_version(void) {
+static void print_bootloader_version(void) {
 	char buf[VERSION_HASHLEN];
 
 	read_version(buf, CMD_VERSION_BOOT);
@@ -186,12 +186,12 @@ void print_bootloader_version(void) {
 	print_version(buf);
 }
 
-void write_cmp_result(char result)
+static void write_cmp_result(char result)
 {
 	writebuff(&result, ADDR_CMP, 1);
 }
 
-void goto_bootloader(void) {
+static void goto_bootloader(void) {
 	int fd;
 	char cmd[3];
 
@@ -213,7 +213,7 @@ void goto_bootloader(void) {
 	sleep(BOOTLOADER_TRANS_DELAY);
 }
 
-void flash_file(char *filename) {
+static void flash_file(char *filename) {
 	int fd, size, rsize;
 	char buff[FLASH_SIZE], rbuff[FLASH_SIZE], result;
 
@@ -246,7 +246,7 @@ void flash_file(char *filename) {
 	write_cmp_result(result);
 }
 
-void usage(void) {
+static void usage(void) {
 	printf("omnia-mcutool -- Turris Omnia MCU flash utility\n");
 	printf("Usage: omnia-mcutool [COMMAND] [FILE].\n");
 	printf("  -h : Print this help.\n");
