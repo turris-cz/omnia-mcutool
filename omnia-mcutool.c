@@ -468,6 +468,45 @@ static bool is_in_bootloader(void)
 	       mcu_proto == MCU_PROTO_BOOT_NEW;
 }
 
+static int printf_to_file(const char *path, const char *fmt, ...)
+{
+	int fd = open(path, O_WRONLY), res;
+	va_list ap;
+
+	if (fd < 0)
+		return fd;
+
+	va_start(ap, fmt);
+	res = vdprintf(fd, fmt, ap);
+	va_end(ap);
+
+	close(fd);
+
+	return res;
+}
+
+static void unbind_driver(const char *path, const char *unb, const char *name)
+{
+	int res;
+
+	res = printf_to_file(path, unb);
+	if (res < 0) {
+		if (errno != ENOENT)
+			printf("Failed unbinding %s driver\n", name);
+	} else
+		printf("Unbound %s driver\n", name);
+}
+
+static void unbind_drivers(void)
+{
+	unbind_driver("/sys/bus/i2c/devices/1-002b/driver/unbind",
+		      "1-002b", "LEDs");
+	unbind_driver("/sys/bus/platform/devices/gpio-keys/driver/unbind",
+		      "gpio-keys", "front button input");
+	unbind_driver("/sys/bus/i2c/devices/1-002a/driver/unbind",
+		      "1-002a", "MCU");
+}
+
 static void goto_bootloader(void)
 {
 	uint8_t cmd[3];
@@ -556,6 +595,7 @@ int main(int argc, char *argv[])
 		print_checksum();
 		break;
 	case 'f':
+		unbind_drivers();
 		if (!is_in_bootloader())
 			goto_bootloader();
 		flash_file(optarg);
