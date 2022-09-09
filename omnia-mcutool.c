@@ -28,6 +28,8 @@
 #include <getopt.h>
 #include <endian.h>
 
+#include "i2c_iface.h"
+
 #define MIN(a, b)				\
 	({					\
 		__auto_type ___a = (a);		\
@@ -47,10 +49,6 @@
 #define FILE_CMP_ERROR	0xDD /* bootloader flash protocol code: flash failed */
 #define ADDR_CMP	0xFFFF /* bootloader flash protocol code addr */
 
-#define CMD_CONTROL		0x02 /* app protocol cmd */
-#define CMD_CONTROL_FLASH	0x8080 /* app protocol cmd argument */
-#define CMD_VERSION_APP		0x0A /* app protocol cmd */
-#define CMD_VERSION_BOOT	0x0E /* app protocol cmd */
 #define VERSION_HASHLEN		20 /* 20 bytes of SHA-1 git hash */
 #define BOOTLOADER_TRANS_DELAY	1 /* Bootloader transition delay */
 
@@ -216,7 +214,7 @@ static void print_app_version(void)
 {
 	char buf[VERSION_HASHLEN];
 
-	read_version(buf, CMD_VERSION_APP);
+	read_version(buf, CMD_GET_FW_VERSION_APP);
 	printf("Application version: ");
 	print_version(buf);
 }
@@ -225,7 +223,7 @@ static void print_bootloader_version(void)
 {
 	char buf[VERSION_HASHLEN];
 
-	read_version(buf, CMD_VERSION_BOOT);
+	read_version(buf, CMD_GET_FW_VERSION_BOOT);
 	printf("Bootloader version:  ");
 	print_version(buf);
 }
@@ -237,9 +235,9 @@ static void goto_bootloader(void)
 
 	printf("Switching MCU to bootloader...\n");
 
-	cmd[0] = CMD_CONTROL;
-	cmd[1] = (CMD_CONTROL_FLASH & 0xFF00) >> 8;
-	cmd[2] = (CMD_CONTROL_FLASH & 0xFF);
+	cmd[0] = CMD_GENERAL_CONTROL;
+	cmd[1] = CTL_BOOTLOADER;
+	cmd[2] = CTL_BOOTLOADER;
 
 	fd = open_i2c(DEV_ADDR_APP);
 
