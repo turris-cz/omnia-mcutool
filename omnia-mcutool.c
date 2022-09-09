@@ -13,6 +13,7 @@
  */
 
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
@@ -231,31 +232,21 @@ static void cmd_write(const void *buf, size_t len)
 	close(fd);
 }
 
-static void print_version(char version[])
+static void print_version(bool bootloader)
 {
-	int i;
-	for (i = 0; i < VERSION_HASHLEN; i++)
-		printf("%02x", version[i]);
+	char buf[VERSION_HASHLEN];
+
+	cmd_read(bootloader ? CMD_GET_FW_VERSION_BOOT :
+			      CMD_GET_FW_VERSION_APP,
+		 buf, VERSION_HASHLEN);
+
+	printf("%s", bootloader ? "Bootloader version:  " :
+				  "Application version: ");
+
+	for (int i = 0; i < VERSION_HASHLEN; i++)
+		printf("%02x", buf[i]);
 
 	printf("\n");
-}
-
-static void print_app_version(void)
-{
-	char buf[VERSION_HASHLEN];
-
-	cmd_read(CMD_GET_FW_VERSION_APP, buf, VERSION_HASHLEN);
-	printf("Application version: ");
-	print_version(buf);
-}
-
-static void print_bootloader_version(void)
-{
-	char buf[VERSION_HASHLEN];
-
-	cmd_read(CMD_GET_FW_VERSION_BOOT, buf, VERSION_HASHLEN);
-	printf("Bootloader version:  ");
-	print_version(buf);
 }
 
 static void goto_bootloader(void)
@@ -339,8 +330,8 @@ int main(int argc, char *argv[])
 		usage();
 		break;
 	case 'v':
-		print_bootloader_version();
-		print_app_version();
+		print_version(true);
+		print_version(false);
 		break;
 	case 'f':
 		goto_bootloader();
