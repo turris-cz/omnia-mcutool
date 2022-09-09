@@ -258,6 +258,166 @@ static void print_version(bool bootloader)
 	}
 }
 
+static uint16_t get_status_word(void)
+{
+	uint16_t status;
+
+	cmd_read(CMD_GET_STATUS_WORD, &status, 2, true);
+
+	return le16toh(status);
+}
+
+static uint8_t get_mcu_type(void)
+{
+	static uint8_t mcu_type;
+	static bool cached;
+
+	if (cached)
+		return mcu_type;
+
+	mcu_type = get_status_word() & STS_MCU_TYPE_MASK;
+	cached = true;
+
+	return mcu_type;
+}
+
+static void print_mcu_type(void)
+{
+	printf("MCU type: ");
+	switch (get_mcu_type()) {
+	case STS_MCU_TYPE_STM32:
+		printf("STM32\n");
+		break;
+	case STS_MCU_TYPE_GD32:
+		printf("GD32\n");
+		break;
+	case STS_MCU_TYPE_MKL:
+		printf("MKL\n");
+		break;
+	default:
+		printf("unknown\n");
+		break;
+	}
+}
+
+static uint16_t get_features(void)
+{
+	static uint16_t features;
+	static bool cached;
+
+	if (cached)
+		return features;
+
+	if (get_status_word() & STS_FEATURES_SUPPORTED)
+		cmd_read(CMD_GET_FEATURES, &features, 2, true);
+	else
+		features = 0;
+
+	features = le16toh(features);
+	cached = true;
+
+	return features;
+}
+
+static void print_features(void)
+{
+	uint16_t features = get_features();
+
+	printf("Features: 0x%04x%s\n", features, features ? "" : " (none)");
+
+#define _FEAT(n)			\
+	if (features & FEAT_ ## n)	\
+		printf("  " # n "\n");
+	_FEAT(PERIPH_MCU)
+	_FEAT(EXT_CMDS)
+	_FEAT(WDT_PING)
+	switch (FIELD_GET(FEAT_LED_STATE_EXT_MASK, features)) {
+	case 0:
+		break;
+	case 1:
+		printf("  LED_STATE_EXT\n");
+		break;
+	case 2:
+		printf("  LED_STATE_EXT_V32\n");
+		break;
+	default:
+		printf("  unknown LED_STATE_EXT\n");
+		break;
+	}
+	_FEAT(LED_GAMMA_CORRECTION)
+	_FEAT(NEW_INT_API)
+	_FEAT(BOOTLOADER)
+	_FEAT(FLASHING)
+	_FEAT(NEW_MESSAGE_API)
+	_FEAT(BRIGHTNESS_INT)
+	_FEAT(POWEROFF_WAKEUP)
+	_FEAT(CAN_OLD_MESSAGE_API)
+#undef _FEAT
+}
+
+static const char *get_firmware_prefix(void)
+{
+	static char prefix[32];
+	static bool cached;
+	const char *mcu;
+	bool user_reg;
+	unsigned rev;
+
+	if (cached)
+		return prefix;
+
+	switch (get_mcu_type()) {
+	case STS_MCU_TYPE_STM32:
+		mcu = "stm32";
+		break;
+	case STS_MCU_TYPE_GD32:
+		mcu = "gd32";
+		break;
+	case STS_MCU_TYPE_MKL:
+		mcu = "mkl";
+		break;
+	default:
+		return "unknown";
+	}
+
+	user_reg = !(get_status_word() & STS_USER_REGULATOR_NOT_SUPPORTED);
+
+	if (get_features() & FEAT_PERIPH_MCU)
+		rev = 32;
+	else
+		rev = 23;
+
+	snprintf(prefix, sizeof(prefix), "%s-rev%u%s", mcu, rev,
+		 user_reg ? "-user-regulator" : "");
+
+	cached = true;
+
+	return prefix;
+}
+
+static void print_board_firmware_type(void)
+{
+	printf("Board firmware type: %s\n", get_firmware_prefix());
+}
+
+static void print_checksum(void)
+{
+	uint32_t buf[2];
+
+	/*
+	 * If CMD_GET_FW_CHECKSUM command is not supported, the I2C transfer
+	 * either fails or returns all ones.
+	 */
+	if (cmd_read(CMD_GET_FW_CHECKSUM, &buf, sizeof(buf), false) < 0)
+		return;
+
+	if (buf[0] == 0xffffffff)
+		return;
+
+	printf("Application firmware length: %u Bytes\n", le32toh(buf[0]));
+	printf("Application firmware checksum: %#010x\n", le32toh(buf[1]));
+}
+
 static void goto_bootloader(void)
 {
 	uint8_t cmd[3];
@@ -341,6 +501,10 @@ int main(int argc, char *argv[])
 	case 'v':
 		print_version(true);
 		print_version(false);
+		print_mcu_type();
+		print_board_firmware_type();
+		print_features();
+		print_checksum();
 		break;
 	case 'f':
 		goto_bootloader();
