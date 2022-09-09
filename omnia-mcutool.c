@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -185,18 +186,47 @@ static uint16_t flash_recv(void *dst, uint16_t offset, uint16_t size)
 	return total;
 }
 
-static void read_version(char version[], char cmd)
+static void cmd_read(uint8_t cmd, void *buf, size_t len)
 {
-	int rb, fd;
+	struct i2c_rdwr_ioctl_data trans;
+	struct i2c_msg msgs[2] = {};
+	int fd;
+
+	trans.msgs = msgs;
+	trans.nmsgs = 2;
+	msgs[0].addr = DEV_ADDR_APP;
+	msgs[0].len = 1;
+	msgs[0].buf = &cmd;
+	msgs[1].addr = DEV_ADDR_APP;
+	msgs[1].flags = I2C_M_RD | I2C_M_STOP;
+	msgs[1].len = len;
+	msgs[1].buf = buf;
 
 	fd = open_i2c(DEV_ADDR_APP);
 
-	if (write(fd, &cmd, 1) != 1)
-		die("I2C write operation failed: %m");
+	if (ioctl(fd, I2C_RDWR, &trans) != 2)
+		die("%s: I2C transfer operation failed: %m", __func__);
 
-	rb = read(fd, version, VERSION_HASHLEN);
-	if (rb < 0)
-		die("I2C read operation failed: %m");
+	close(fd);
+}
+
+static void cmd_write(const void *buf, size_t len)
+{
+	struct i2c_rdwr_ioctl_data trans;
+	struct i2c_msg msgs[1] = {};
+	int fd;
+
+	trans.msgs = msgs;
+	trans.nmsgs = 1;
+	msgs[0].addr = DEV_ADDR_APP;
+	msgs[0].flags = I2C_M_STOP;
+	msgs[0].len = len;
+	msgs[0].buf = (void *)buf;
+
+	fd = open_i2c(DEV_ADDR_APP);
+
+	if (ioctl(fd, I2C_RDWR, &trans) != 1)
+		die("%s: I2C transfer operation failed: %m", __func__);
 
 	close(fd);
 }
@@ -214,7 +244,7 @@ static void print_app_version(void)
 {
 	char buf[VERSION_HASHLEN];
 
-	read_version(buf, CMD_GET_FW_VERSION_APP);
+	cmd_read(CMD_GET_FW_VERSION_APP, buf, VERSION_HASHLEN);
 	printf("Application version: ");
 	print_version(buf);
 }
@@ -223,15 +253,14 @@ static void print_bootloader_version(void)
 {
 	char buf[VERSION_HASHLEN];
 
-	read_version(buf, CMD_GET_FW_VERSION_BOOT);
+	cmd_read(CMD_GET_FW_VERSION_BOOT, buf, VERSION_HASHLEN);
 	printf("Bootloader version:  ");
 	print_version(buf);
 }
 
 static void goto_bootloader(void)
 {
-	int fd;
-	char cmd[3];
+	uint8_t cmd[3];
 
 	printf("Switching MCU to bootloader...\n");
 
@@ -239,12 +268,7 @@ static void goto_bootloader(void)
 	cmd[1] = CTL_BOOTLOADER;
 	cmd[2] = CTL_BOOTLOADER;
 
-	fd = open_i2c(DEV_ADDR_APP);
-
-	if (write(fd, cmd, 3) != 3)
-		die("I2C write operation failed: %m");
-
-	close(fd);
+	cmd_write(cmd, sizeof(cmd));
 
 	sleep(BOOTLOADER_TRANS_DELAY);
 }
