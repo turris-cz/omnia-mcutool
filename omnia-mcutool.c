@@ -418,6 +418,56 @@ static void print_checksum(void)
 	printf("Application firmware checksum: %#010x\n", le32toh(buf[1]));
 }
 
+typedef enum {
+	MCU_PROTO_APP,
+	MCU_PROTO_BOOT_OLD,
+	MCU_PROTO_BOOT_NEW,
+} mcu_proto_t;
+
+static mcu_proto_t get_mcu_proto(void)
+{
+	uint16_t status;
+
+	/* Newer bootloaders support CMD_GET_STATUS_WORD and
+	 * CMD_GET_FEATURES, with FEAT_BOOTLOADER bit set.
+	 */
+	if (!cmd_read(CMD_GET_STATUS_WORD, &status, 2, false)) {
+		uint16_t features;
+
+		status = le16toh(status);
+		if (!(status & STS_FEATURES_SUPPORTED))
+			return MCU_PROTO_APP;
+
+		features = get_features();
+		if (!(features & FEAT_BOOTLOADER))
+			return MCU_PROTO_APP;
+
+		if (features & FEAT_FLASHING)
+			return MCU_PROTO_BOOT_NEW;
+		else
+			return MCU_PROTO_BOOT_OLD;
+	} else {
+		/* For older bootloaders, poke bootloader address */
+		int fd = open_i2c(DEV_ADDR_BOOT);
+		uint8_t c;
+		bool res;
+
+		res = read(fd, &c, 1) == 1;
+
+		close(fd);
+
+		return res ? MCU_PROTO_BOOT_OLD : MCU_PROTO_APP;
+	}
+}
+
+static bool is_in_bootloader(void)
+{
+	mcu_proto_t mcu_proto = get_mcu_proto();
+
+	return mcu_proto == MCU_PROTO_BOOT_OLD ||
+	       mcu_proto == MCU_PROTO_BOOT_NEW;
+}
+
 static void goto_bootloader(void)
 {
 	uint8_t cmd[3];
@@ -484,7 +534,6 @@ static void usage(void)
 	printf("  -h : Print this help.\n");
 	printf("  -v : Print version of MCU bootloader and app.\n");
 	printf("  -f [FILE] : Flash application image.\n");
-	printf("  -r [FILE] : Flash application image. Rescue in bootloader.\n");
 }
 
 int main(int argc, char *argv[])
@@ -493,7 +542,7 @@ int main(int argc, char *argv[])
 
 	argv0 = argv[0];
 
-	opt = getopt(argc, argv, "hvf:r:");
+	opt = getopt(argc, argv, "hvf:");
 	switch (opt) {
 	case 'h':
 		usage();
@@ -507,8 +556,8 @@ int main(int argc, char *argv[])
 		print_checksum();
 		break;
 	case 'f':
-		goto_bootloader();
-	case 'r':
+		if (!is_in_bootloader())
+			goto_bootloader();
 		flash_file(optarg);
 		printf("Writing finished. Please reboot!\n");
 		break;
