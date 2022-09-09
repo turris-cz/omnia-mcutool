@@ -12,6 +12,7 @@
  * of the License, or (at your option) any later version.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -45,20 +46,47 @@
 #define VERSION_HASHLEN		20 /* 20 bytes of SHA-1 git hash */
 #define BOOTLOADER_TRANS_DELAY	1 /* Bootloader transition delay */
 
+static const char *argv0;
+
+__attribute__((__format__(__printf__, 1, 2)))
+static void error(const char *fmt, ...)
+{
+	va_list ap;
+
+	fflush(stdout);
+	fflush(stderr);
+
+	while (*fmt == '\n') {
+		fputc('\n', stderr);
+		++fmt;
+	}
+
+	fprintf(stderr, "%s: ", argv0);
+
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+
+	fputc('\n', stderr);
+}
+
+__attribute__((__noreturn__, __always_inline__, __format__(__printf__, 1, 2)))
+static inline void die(const char *fmt, ...)
+{
+	error(fmt, __builtin_va_arg_pack());
+
+	exit(EXIT_FAILURE);
+}
 
 static int open_i2c(int addr)
 {
 	int fd;
 
-	if ((fd = open(DEV_NAME, O_RDWR)) < 0) {
-		perror("Failed to open I2C bus");
-		exit(EXIT_FAILURE);
-	}
+	if ((fd = open(DEV_NAME, O_RDWR)) < 0)
+		die("failed to open I2C bus: %m");
 
-	if (ioctl(fd, I2C_SLAVE, addr) < 0) {
-		perror("Failed to acquire bus access and/or talk to slave.");
-		exit(EXIT_FAILURE);
-	}
+	if (ioctl(fd, I2C_SLAVE, addr) < 0)
+		die("failed to acquire bus access and/or talk to slave: %m");
 
 	return fd;
 }
@@ -93,10 +121,8 @@ static void writebuff(char *buff, int startaddr, int len)
 			nanosleep(&delay, NULL);
 
 			if (w != size + ADDR_SIZE) {
-				if (r == RETRY) {
-					perror("I2C write operation failed");
-					exit(EXIT_FAILURE);
-				}
+				if (r == RETRY)
+					die("\nI2C write operation failed");
 			} else
 				break; /* Retry loop. */
 		}
@@ -122,16 +148,12 @@ static int readbuff(char *buff, int startaddr, int len)
 		set_addr(b, startaddr + offset);
 		size = len - offset < PAGE_SIZE ? len - offset : PAGE_SIZE;
 
-		if (write(fd, b, ADDR_SIZE) != 2) {
-			perror("I2C write operation failed");
-			exit(EXIT_FAILURE);
-		}
+		if (write(fd, b, ADDR_SIZE) != 2)
+			die("\nI2C write operation failed: %m");
 
 		rb = read(fd, buff + offset, size);
-		if (rb < 0) {
-			perror("I2C read operation failed");
-			exit(EXIT_FAILURE);
-		}
+		if (rb < 0)
+			die("\nI2C read operation failed: %m");
 
 		readtotal += rb;
 
@@ -156,16 +178,12 @@ static void read_version(char version[], char cmd)
 
 	fd = open_i2c(DEV_ADDR_APP);
 
-	if (write(fd, &cmd, 1) != 1) {
-		perror("I2C write operation failed");
-		exit(EXIT_FAILURE);
-	}
+	if (write(fd, &cmd, 1) != 1)
+		die("I2C write operation failed: %m");
 
 	rb = read(fd, version, VERSION_HASHLEN);
-	if (rb < 0) {
-		perror("I2C read operation failed");
-		exit(EXIT_FAILURE);
-	}
+	if (rb < 0)
+		die("I2C read operation failed: %m");
 
 	close(fd);
 }
@@ -215,10 +233,8 @@ static void goto_bootloader(void)
 
 	fd = open_i2c(DEV_ADDR_APP);
 
-	if (write(fd, cmd, 3) != 3) {
-		perror("I2C write operation failed");
-		exit(EXIT_FAILURE);
-	}
+	if (write(fd, cmd, 3) != 3)
+		die("I2C write operation failed: %m");
 
 	close(fd);
 
@@ -230,15 +246,11 @@ static void flash_file(char *filename)
 	int fd, size, rsize;
 	char buff[FLASH_SIZE], rbuff[FLASH_SIZE], result;
 
-	if ((fd = open(filename, O_RDONLY)) < 0) {
-		perror("Failed to open file");
-		exit(EXIT_FAILURE);
-	}
+	if ((fd = open(filename, O_RDONLY)) < 0)
+		die("failed to open file: %m");
 
-	if ((size = read(fd, buff, FLASH_SIZE)) <= 0) {
-		perror("Failed to read file");
-		exit(EXIT_FAILURE);
-	}
+	if ((size = read(fd, buff, FLASH_SIZE)) <= 0)
+		die("failed to read file: %m");
 
 	close(fd);
 
@@ -272,6 +284,8 @@ static void usage(void)
 int main(int argc, char *argv[])
 {
 	int opt;
+
+	argv0 = argv[0];
 
 	opt = getopt(argc, argv, "hvf:r:");
 	switch (opt) {
