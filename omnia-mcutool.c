@@ -568,12 +568,22 @@ static void flash_file(char *filename)
 
 static void usage(void)
 {
-	printf("omnia-mcutool -- Turris Omnia MCU flash utility\n");
-	printf("Usage: omnia-mcutool [COMMAND] [FILE].\n");
-	printf("  -h : Print this help.\n");
-	printf("  -v : Print version of MCU bootloader and app.\n");
-	printf("  -f [FILE] : Flash application image.\n");
+	printf("Usage: omnia-mcutool [OPTION]...\n\n");
+	printf("omnia-mcutool -- Turris Omnia MCU utility\n\n");
+	printf("Options:\n");
+	printf("  -h, --help                   Print this help\n\n");
+	printf(" Firmware flashing options:\n");
+	printf("  -v, --firmware-version       Print version of the MCU bootloader and\n"
+	       "                               application firmware\n");
+	printf("  -f, --firmware=<FILE>        Flash MCU firmware from file FILE\n");
 }
+
+static const struct option long_options[] = {
+	{ "help",		no_argument,		NULL, 'h' },
+	{ "firmware-version",	no_argument,		NULL, 'v' },
+	{ "firmware",		required_argument,	NULL, 'f' },
+	{},
+};
 
 int main(int argc, char *argv[])
 {
@@ -581,7 +591,7 @@ int main(int argc, char *argv[])
 
 	argv0 = argv[0];
 
-	opt = getopt(argc, argv, "hvf:");
+	opt = getopt_long(argc, argv, "hvf:", long_options, NULL);
 	switch (opt) {
 	case 'h':
 		usage();
@@ -602,7 +612,7 @@ int main(int argc, char *argv[])
 		printf("Writing finished. Please reboot!\n");
 		break;
 	default:
-		die("try the -h option for usage information");
+		die("try the --help option for usage information");
 	}
 
 	return EXIT_SUCCESS;
