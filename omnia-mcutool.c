@@ -303,8 +303,7 @@ int main(int argc, char *argv[])
 		printf("Writing finished. Please reboot!\n");
 		break;
 	default:
-		printf("Unknown option.\n\n");
-		usage();
+		die("try the -h option for usage information");
 	}
 
 	return EXIT_SUCCESS;
