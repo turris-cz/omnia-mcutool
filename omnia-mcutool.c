@@ -285,7 +285,7 @@ static uint16_t flash_old_recv(void *dst, uint16_t offset, uint16_t size,
 	return total;
 }
 
-static int _cmd_write_read(const void *wbuf, size_t wlen,
+static int _cmd_write_read(i2c_addr_t addr, const void *wbuf, size_t wlen,
 			   void *rbuf, size_t rlen)
 {
 	struct i2c_rdwr_ioctl_data trans;
@@ -294,15 +294,15 @@ static int _cmd_write_read(const void *wbuf, size_t wlen,
 
 	trans.msgs = msgs;
 	trans.nmsgs = 2;
-	msgs[0].addr = I2C_ADDR_MCU;
+	msgs[0].addr = addr;
 	msgs[0].len = wlen;
 	msgs[0].buf = (void *)wbuf;
-	msgs[1].addr = I2C_ADDR_MCU;
+	msgs[1].addr = addr;
 	msgs[1].flags = I2C_M_RD | I2C_M_STOP;
 	msgs[1].len = rlen;
 	msgs[1].buf = rbuf;
 
-	fd = open_i2c(I2C_ADDR_MCU);
+	fd = open_i2c(addr);
 
 	ret = ioctl(fd, I2C_RDWR, &trans);
 	saved_errno = errno;
@@ -314,30 +314,36 @@ static int _cmd_write_read(const void *wbuf, size_t wlen,
 	return ret;
 }
 
-static int cmd_write_read(const void *wbuf, size_t wlen, void *rbuf,
-			  size_t rlen, bool fail_on_nxio)
+static int cmd_write_read_mcu(const void *wbuf, size_t wlen, void *rbuf,
+			      size_t rlen, bool fail_on_nxio)
 {
 	int ret;
 
-	ret = _cmd_write_read(wbuf, wlen, rbuf, rlen);
+	ret = _cmd_write_read(I2C_ADDR_MCU, wbuf, wlen, rbuf, rlen);
 	if ((fail_on_nxio && ret != 2) || (ret < 0 && errno != ENXIO))
 		die("%s: I2C transfer operation failed: %m", __func__);
 
 	return ret < 0 ? ret : 0;
 }
 
-static int cmd_read(uint8_t cmd, void *buf, size_t len, bool fail_on_nxio)
+static int _cmd_read(i2c_addr_t addr, uint8_t cmd, void *buf, size_t len,
+		     bool fail_on_nxio)
 {
 	int ret;
 
-	ret = _cmd_write_read(&cmd, 1, buf, len);
+	ret = _cmd_write_read(addr, &cmd, 1, buf, len);
 	if ((fail_on_nxio && ret != 2) || (ret < 0 && errno != ENXIO))
 		die("%s: I2C transfer operation failed: %m", __func__);
 
 	return ret < 0 ? ret : 0;
 }
 
-static void cmd_write(const void *buf, size_t len)
+static int cmd_read_mcu(uint8_t cmd, void *buf, size_t len, bool fail_on_nxio)
+{
+	return _cmd_read(I2C_ADDR_MCU, cmd, buf, len, fail_on_nxio);
+}
+
+static void _cmd_write(i2c_addr_t addr, const void *buf, size_t len)
 {
 	struct i2c_rdwr_ioctl_data trans;
 	struct i2c_msg msgs[1] = {};
@@ -345,12 +351,12 @@ static void cmd_write(const void *buf, size_t len)
 
 	trans.msgs = msgs;
 	trans.nmsgs = 1;
-	msgs[0].addr = I2C_ADDR_MCU;
+	msgs[0].addr = addr;
 	msgs[0].flags = I2C_M_STOP;
 	msgs[0].len = len;
 	msgs[0].buf = (void *)buf;
 
-	fd = open_i2c(I2C_ADDR_MCU);
+	fd = open_i2c(addr);
 
 	if (ioctl(fd, I2C_RDWR, &trans) != 1)
 		die("%s: I2C transfer operation failed: %m", __func__);
@@ -358,11 +364,16 @@ static void cmd_write(const void *buf, size_t len)
 	close(fd);
 }
 
+static void cmd_write_mcu(const void *buf, size_t len)
+{
+	_cmd_write(I2C_ADDR_MCU, buf, len);
+}
+
 static int get_version(void *dst, bool bootloader)
 {
-	return cmd_read(bootloader ? CMD_GET_FW_VERSION_BOOT :
-				     CMD_GET_FW_VERSION_APP,
-			dst, VERSION_HASHLEN, false);
+	return cmd_read_mcu(bootloader ? CMD_GET_FW_VERSION_BOOT :
+					 CMD_GET_FW_VERSION_APP,
+			    dst, VERSION_HASHLEN, false);
 }
 
 static void print_version(bool bootloader)
@@ -387,7 +398,7 @@ static uint16_t get_status_word(void)
 {
 	uint16_t status;
 
-	cmd_read(CMD_GET_STATUS_WORD, &status, 2, true);
+	cmd_read_mcu(CMD_GET_STATUS_WORD, &status, 2, true);
 
 	return le16toh(status);
 }
@@ -435,7 +446,7 @@ static uint16_t get_features(void)
 		return features;
 
 	if (get_status_word() & STS_FEATURES_SUPPORTED)
-		cmd_read(CMD_GET_FEATURES, &features, 2, true);
+		cmd_read_mcu(CMD_GET_FEATURES, &features, 2, true);
 	else
 		features = 0;
 
@@ -451,7 +462,7 @@ static uint16_t get_bootloader_features(void)
 	uint16_t features;
 
 	if (!(get_status_word() & STS_FEATURES_SUPPORTED) ||
-	    cmd_write_read(&cmd, 2, &features, 2, false) < 0)
+	    cmd_write_read_mcu(&cmd, 2, &features, 2, false) < 0)
 		return FEAT_BOOTLOADER;
 
 	return le16toh(features);
@@ -546,7 +557,7 @@ static void print_checksum(void)
 	 * If CMD_GET_FW_CHECKSUM command is not supported, the I2C transfer
 	 * either fails or returns all ones.
 	 */
-	if (cmd_read(CMD_GET_FW_CHECKSUM, &buf, sizeof(buf), false) < 0)
+	if (cmd_read_mcu(CMD_GET_FW_CHECKSUM, &buf, sizeof(buf), false) < 0)
 		return;
 
 	if (buf[0] == 0xffffffff)
@@ -569,7 +580,7 @@ static mcu_proto_t _get_mcu_proto(void)
 	/* Newer bootloaders support CMD_GET_STATUS_WORD and
 	 * CMD_GET_FEATURES, with FEAT_BOOTLOADER bit set.
 	 */
-	if (!cmd_read(CMD_GET_STATUS_WORD, &status, 2, false)) {
+	if (!cmd_read_mcu(CMD_GET_STATUS_WORD, &status, 2, false)) {
 		uint16_t features;
 
 		status = le16toh(status);
@@ -666,7 +677,7 @@ static void goto_bootloader(void)
 	cmd[1] = CTL_BOOTLOADER;
 	cmd[2] = CTL_BOOTLOADER;
 
-	cmd_write(cmd, sizeof(cmd));
+	cmd_write_mcu(cmd, sizeof(cmd));
 	features_cached = false;
 
 	sleep(BOOTLOADER_TRANS_DELAY);
@@ -858,7 +869,7 @@ static uint8_t flash_cmd(uint8_t cmd, const void *data, uint8_t len,
 
 	put_unaligned_le32(crc32(crc_init, buf, len + 4), &buf[len + 4]);
 
-	cmd_write_read(buf + 2, len + 6, &res, 1, true);
+	cmd_write_read_mcu(buf + 2, len + 6, &res, 1, true);
 
 	return res;
 }
@@ -867,7 +878,7 @@ static uint8_t flash_get_state(void)
 {
 	uint8_t state;
 
-	cmd_read(CMD_FLASH, &state, 1, true);
+	cmd_read_mcu(CMD_FLASH, &state, 1, true);
 
 	return state;
 }
