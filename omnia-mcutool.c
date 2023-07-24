@@ -4,7 +4,7 @@
  * the git hashes compiled into the images) and flash application image
  * to the MCU EEPROM.
  *
- * Copyright (C) 2016, 2022 CZ.NIC
+ * Copyright (C) 2016, 2022, 2023 CZ.NIC
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -85,7 +85,7 @@ static int open_i2c(int addr)
 	if ((fd = open(DEV_NAME, O_RDWR)) < 0)
 		die("failed to open I2C bus: %m");
 
-	if (ioctl(fd, I2C_SLAVE, addr) < 0)
+	if (ioctl(fd, I2C_SLAVE_FORCE, addr) < 0)
 		die("failed to acquire bus access and/or talk to slave: %m");
 
 	return fd;
