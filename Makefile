@@ -1,6 +1,10 @@
 CC = gcc
 CFLAGS += -Wall
 
+override MCUTOOL_VERSION = $(shell git describe --always --dirty --tags)
+
+CPPFLAGS += -DMCUTOOL_VERSION='"'$(MCUTOOL_VERSION)'"'
+
 OBJ = omnia-mcutool.o
 
 omnia-mcutool: $(OBJ)

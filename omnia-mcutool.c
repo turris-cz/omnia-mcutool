@@ -580,7 +580,8 @@ static void usage(void)
 	printf("Usage: omnia-mcutool [OPTION]...\n\n");
 	printf("omnia-mcutool -- Turris Omnia MCU utility\n\n");
 	printf("Options:\n");
-	printf("  -h, --help                   Print this help\n\n");
+	printf("  -h, --help                   Print this help\n");
+	printf("      --version                Print mcutool's version\n\n");
 	printf(" Firmware flashing options:\n");
 	printf("  -v, --firmware-version       Print version of the MCU bootloader and\n"
 	       "                               application firmware\n");
@@ -589,6 +590,7 @@ static void usage(void)
 
 static const struct option long_options[] = {
 	{ "help",		no_argument,		NULL, 'h' },
+	{ "version",		no_argument,		NULL, 'V' },
 	{ "firmware-version",	no_argument,		NULL, 'v' },
 	{ "firmware",		required_argument,	NULL, 'f' },
 	{},
@@ -611,6 +613,14 @@ int main(int argc, char *argv[])
 		switch (opt) {
 		case 'h':
 			usage();
+			exit(EXIT_SUCCESS);
+		case 'V':
+			puts("omnia-mcutool " MCUTOOL_VERSION " (built on " __DATE__ " " __TIME__ ")\n"
+			     "Copyright (C) 2016, 2022, 2023 CZ.NIC, z.s.p.o.\n"
+			     "License GPLv2+: GNU GPL version 2 or later.\n"
+			     "This is free software: you are free to change and redistribute it.\n"
+			     "There is NO WARRANTY, to the extent permitted by law.\n\n"
+			     "Written by Tomas Hlavacek and Marek Behun");
 			break;
 		case 'v':
 			print_version(true);
