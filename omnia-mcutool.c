@@ -431,6 +431,13 @@ static uint16_t get_status_word(void)
 	return le16toh(status);
 }
 
+static void set_control(uint8_t bits, uint8_t mask)
+{
+	uint8_t cmd[3] = { CMD_GENERAL_CONTROL, bits, mask };
+
+	cmd_write_mcu(&cmd, sizeof(cmd));
+}
+
 static uint8_t get_mcu_type(void)
 {
 	static uint8_t mcu_type;
@@ -867,6 +874,35 @@ static void set_watchdog_timeout(uint32_t timeout)
 	printf("Watchdog timeout set to %u seconds\n", timeout);
 }
 
+static void print_usb_status(void)
+{
+	uint16_t status = get_status_word();
+
+	printf("USB port 0 (front) power enabled: %s\n",
+	       (status & STS_USB30_PWRON) ? "yes" : "no");
+	printf("USB port 0 (front) overcurrent:   %s\n",
+	       (status & STS_USB30_OVC) ? "yes (WARNING!)" : "no");
+	printf("USB port 1 (rear) power enabled:  %s\n",
+	       (status & STS_USB31_PWRON) ? "yes" : "no");
+	printf("USB port 1 (rear) overcurrent:    %s\n",
+	       (status & STS_USB31_OVC) ? "yes (WARNING!)" : "no");
+}
+
+static void set_usb_power(unsigned port, bool state)
+{
+	uint8_t mask;
+
+	if (port == 1)
+		mask = CTL_USB31_PWRON;
+	else
+		mask = CTL_USB30_PWRON;
+
+	set_control(state ? mask : 0, mask);
+
+	printf("USB port %u (%s) power %s\n", port,
+	       port == 1 ? "rear" : "front", state ? "enabled" : "disabled");
+}
+
 static int printf_to_file(const char *path, const char *fmt, ...)
 {
 	int fd = open(path, O_WRONLY), res;
@@ -908,15 +944,9 @@ static void unbind_drivers(void)
 
 static void goto_bootloader(void)
 {
-	uint8_t cmd[3];
-
 	printf("Switching MCU to bootloader...\n");
 
-	cmd[0] = CMD_GENERAL_CONTROL;
-	cmd[1] = CTL_BOOTLOADER;
-	cmd[2] = CTL_BOOTLOADER;
-
-	cmd_write_mcu(cmd, sizeof(cmd));
+	set_control(CTL_BOOTLOADER, CTL_BOOTLOADER);
 	features_cached = false;
 
 	sleep(BOOTLOADER_TRANS_DELAY);
@@ -1448,7 +1478,11 @@ static void usage(void)
 	printf("      --watchdog-status        Show status of the MCU watchdog\n");
 	printf("      --watchdog=<on|off>      Enable / disable the MCU watchdog\n");
 	printf("      --watchdog-timeout=<N>   Set the timeout of the MCU watchdog to N seconds.\n"
-	       "                               (Can also be used to ping the watchdog)\n");
+	       "                               (Can also be used to ping the watchdog)\n\n");
+	printf(" USB port power control options (use may interfere with kernel driver):\n");
+	printf("      --usb-status             Show USB ports power regulator states\n");
+	printf("      --usb-port-0=<on|off>    Enable/disable power for front USB port\n");
+	printf("      --usb-port-1=<on|off>    Enable/disable power for rear USB port\n");
 }
 
 static const struct option long_options[] = {
@@ -1467,6 +1501,9 @@ static const struct option long_options[] = {
 	{ "watchdog-status",	no_argument,		NULL, 'z' },
 	{ "watchdog",		required_argument,	NULL, 'C' },
 	{ "watchdog-timeout",	required_argument,	NULL, 'T' },
+	{ "usb-status",		optional_argument,	NULL, 'U' },
+	{ "usb-port-0",		required_argument,	NULL, '0' },
+	{ "usb-port-1",		required_argument,	NULL, '1' },
 	{},
 };
 
@@ -1549,6 +1586,17 @@ int main(int argc, char *argv[])
 			set_watchdog_timeout(parse_uint_option("watchdog-timeout",
 							       optarg, 6553,
 							       -1));
+			break;
+		case 'U':
+			print_usb_status();
+			break;
+		case '0':
+			set_usb_power(0, parse_bool_option("usb-port-0",
+							   optarg));
+			break;
+		case '1':
+			set_usb_power(1, parse_bool_option("usb-port-1",
+							   optarg));
 			break;
 		default:
 			die_suggest_help(NULL);
