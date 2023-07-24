@@ -131,6 +131,18 @@ static int parse_uint_option(const char *opt, const char *arg, int max, int def)
 	return val;
 }
 
+static bool parse_bool_option(const char *opt, const char *arg)
+{
+	if (!strcasecmp(optarg, "on") || !strcasecmp(optarg, "true") ||
+	    !strcasecmp(optarg, "enable") || !strcmp(optarg, "1"))
+		return true;
+	else if (!strcasecmp(optarg, "off") || !strcasecmp(optarg, "false") ||
+		 !strcasecmp(optarg, "disable") || !strcmp(optarg, "0"))
+		return false;
+	else
+		die("unrecognized argument '%s' for option '--%s'", arg, opt);
+}
+
 static void *xmalloc(size_t size)
 {
 	void *res = malloc(size);
@@ -800,6 +812,61 @@ static void poweroff(uint16_t arg)
 	cmd_write_mcu(cmd, sizeof(cmd));
 }
 
+static void print_watchdog_status(void)
+{
+	uint8_t state;
+
+	cmd_read_mcu(CMD_GET_WATCHDOG_STATE, &state, sizeof(state), true);
+
+	printf("MCU watchdog is %s\n", state ? "enabled" : "disabled");
+
+	if (get_features() & FEAT_WDT_PING) {
+		uint16_t timeleft;
+
+		cmd_read_mcu(CMD_GET_WDT_TIMELEFT, &timeleft, sizeof(timeleft),
+			     true);
+
+		timeleft = le16toh(timeleft);
+
+		printf("%s: %u.%u seconds\n",
+		       state ? "Time left until watchdog expiration" :
+			       "Configured watchdog timeout",
+		       timeleft / 10, timeleft % 10);
+	} else if (state) {
+		printf("Cannot determine time left until expiration\n");
+		printf("(MCU firmware does not support the WDT_PING feature.\n"
+		       " You need to upgrade MCU firmware.)\n");
+	}
+}
+
+static void set_watchdog(bool state)
+{
+	uint8_t cmd[2];
+
+	cmd[0] = CMD_SET_WATCHDOG_STATE;
+	cmd[1] = state;
+
+	cmd_write_mcu(&cmd, sizeof(cmd));
+
+	printf("Watchdog %s\n", state ? "enabled" : "disabled");
+}
+
+static void set_watchdog_timeout(uint32_t timeout)
+{
+	uint8_t cmd[3];
+
+	assert_feature(WDT_PING);
+
+	cmd[0] = CMD_SET_WDT_TIMEOUT;
+
+	/* the argument of this command is in deciseconds */
+	put_unaligned_le16(timeout * 10, &cmd[1]);
+
+	cmd_write_mcu(&cmd, sizeof(cmd));
+
+	printf("Watchdog timeout set to %u seconds\n", timeout);
+}
+
 static int printf_to_file(const char *path, const char *fmt, ...)
 {
 	int fd = open(path, O_WRONLY), res;
@@ -1376,7 +1443,12 @@ static void usage(void)
 	       "                               Once powered off, the board can be powered back\n"
 	       "                               on either by pressing the front button (unless\n"
 	       "                               ARG is 0), or at a specified time by configuring\n"
-	       "                               wake up time via the --wakeup option\n");
+	       "                               wake up time via the --wakeup option\n\n");
+	printf(" MCU watchdog control options (use may interfere with kernel driver):\n");
+	printf("      --watchdog-status        Show status of the MCU watchdog\n");
+	printf("      --watchdog=<on|off>      Enable / disable the MCU watchdog\n");
+	printf("      --watchdog-timeout=<N>   Set the timeout of the MCU watchdog to N seconds.\n"
+	       "                               (Can also be used to ping the watchdog)\n");
 }
 
 static const struct option long_options[] = {
@@ -1392,6 +1464,9 @@ static const struct option long_options[] = {
 	{ "wakeup-status",	no_argument,		NULL, 'u' },
 	{ "wakeup",		required_argument,	NULL, 'w' },
 	{ "poweroff",		optional_argument,	NULL, 'p' },
+	{ "watchdog-status",	no_argument,		NULL, 'z' },
+	{ "watchdog",		required_argument,	NULL, 'C' },
+	{ "watchdog-timeout",	required_argument,	NULL, 'T' },
 	{},
 };
 
@@ -1463,6 +1538,17 @@ int main(int argc, char *argv[])
 		case 'p':
 			poweroff(parse_uint_option("poweroff", optarg, -1,
 						   CMD_POWER_OFF_POWERON_BUTTON));
+			break;
+		case 'z':
+			print_watchdog_status();
+			break;
+		case 'C':
+			set_watchdog(parse_bool_option("watchdog", optarg));
+			break;
+		case 'T':
+			set_watchdog_timeout(parse_uint_option("watchdog-timeout",
+							       optarg, 6553,
+							       -1));
 			break;
 		default:
 			die_suggest_help(NULL);
