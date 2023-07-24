@@ -5,7 +5,7 @@ override MCUTOOL_VERSION = $(shell git describe --always --dirty --tags)
 
 CPPFLAGS += -DMCUTOOL_VERSION='"'$(MCUTOOL_VERSION)'"'
 
-OBJ = omnia-mcutool.o
+OBJ = omnia-mcutool.o timeutils.o
 
 omnia-mcutool: $(OBJ)
 clean:

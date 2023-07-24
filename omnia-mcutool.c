@@ -33,6 +33,7 @@
 
 #include "crc32.h"
 #include "i2c_iface.h"
+#include "timeutils.h"
 
 #define MIN(a, b)				\
 	({					\
@@ -106,10 +107,17 @@ static inline void die_suggest_help(const char *fmt, ...)
 	die("try the --help option for usage information");
 }
 
-static int parse_uint_option(const char *opt, const char *arg, int max)
+static int parse_uint_option(const char *opt, const char *arg, int max, int def)
 {
 	unsigned long val;
 	char *end;
+
+	if (!arg) {
+		if (def < 0)
+			die("missing argument for option '--%s'", opt);
+
+		return def;
+	}
 
 	val = strtoul(arg, &end, 10);
 
@@ -131,6 +139,14 @@ static void *xmalloc(size_t size)
 		die("out of memory");
 
 	return res;
+}
+
+static void put_unaligned_le16(uint16_t val, void *dst)
+{
+	uint8_t *p = dst;
+
+	*p++ = val;
+	*p++ = val >> 8;
 }
 
 static void put_unaligned_le32(uint32_t val, void *dst)
@@ -456,6 +472,15 @@ static uint16_t get_features(void)
 	return le16toh(features);
 }
 
+static void _assert_feature(uint16_t mask, const char *name)
+{
+	if (!(get_features() & mask))
+		die("MCU firmware does not support the %s feature!\n"
+		    "You need to upgrade MCU firmware!", name);
+}
+
+#define assert_feature(_n) _assert_feature(FEAT_ ## _n, #_n)
+
 static uint16_t get_bootloader_features(void)
 {
 	uint8_t cmd[2] = { CMD_GET_FEATURES, 0xbb };
@@ -626,6 +651,153 @@ static mcu_proto_t get_mcu_proto(void)
 		cached = true;
 
 	return proto;
+}
+
+static void get_uptime_wakeup(uint32_t *uptime, uint32_t *wakeup)
+{
+	uint32_t buf[2];
+
+	assert_feature(POWEROFF_WAKEUP);
+
+	cmd_read_mcu(CMD_GET_UPTIME_AND_WAKEUP, &buf, sizeof(buf), true);
+
+	if (uptime)
+		*uptime = le32toh(buf[0]);
+
+	if (wakeup)
+		*wakeup = le32toh(buf[1]);
+}
+
+static void xctime(const time_t *t, char *d)
+{
+	char *n;
+
+	ctime_r(t, d);
+
+	n = strchr(d, '\n');
+	if (n)
+		*n = '\0';
+}
+
+static void print_wakeup_time(uint32_t uptime, uint32_t wakeup,
+			      time_t wakeup_real)
+{
+	char str[26];
+
+	if (!wakeup) {
+		printf("Wake up time not configured\n");
+		return;
+	}
+
+	xctime(&wakeup_real, str);
+	printf("Wake up configured to %s +- 1 second\n", str);
+	printf("- wake up time: %u %s since MCU firmware boot%s\n",
+	       wakeup, wakeup == 1 ? "second" : "seconds",
+	       wakeup <= uptime ? " (ELAPSED)" : "");
+}
+
+static void print_uptime_wakeup(void)
+{
+	uint32_t uptime, wakeup;
+	time_t boot_time;
+	char str[26];
+
+	get_uptime_wakeup(&uptime, &wakeup);
+
+	boot_time = time(NULL) - uptime;
+	xctime(&boot_time, str);
+
+	printf("MCU %s firmware booted at %s +- 1 second\n",
+	       get_mcu_proto() == MCU_PROTO_APP ? "application" : "bootloader",
+	       str);
+	printf("- uptime: %u %s", uptime, uptime == 1 ? "second" : "seconds");
+	if (uptime >= 60) {
+		uint32_t d, h, m, s;
+
+		d = uptime / 86400;
+		h = (uptime % 86400) / 3600;
+		m = (uptime % 3600) / 60;
+		s = uptime % 60;
+
+		printf(" (");
+		if (uptime >= 3600) {
+			if (uptime >= 86400)
+				printf("%u %s, ", d, d == 1 ? "day" : "days");
+			printf("%u %s, ", h, h == 1 ? "hour" : "hours");
+		}
+		printf("%u %s, %u %s)",
+		       m, m == 1 ? "minute" : "minutes",
+		       s, s == 1 ? "second" : "seconds");
+	}
+	printf("\n");
+
+	print_wakeup_time(uptime, wakeup, boot_time + wakeup);
+}
+
+static void set_wakeup_time(const char *timestamp)
+{
+	uint32_t uptime, wakeup;
+	time_t wakeup_real;
+	uint8_t cmd[5];
+	usec_t p;
+
+	if (!strcasecmp(timestamp, "unset")) {
+		wakeup = 0;
+	} else {
+		if (parse_timestamp(timestamp, &p) < 0)
+			die("invalid argument '%s' for option '--wakeup'",
+			    timestamp);
+
+		wakeup_real = (time_t) (p / 1000000);
+
+		if (wakeup_real < time(NULL))
+			die("timestamp argument '%s' of option '--wakeup' is in the past",
+			    timestamp);
+
+		get_uptime_wakeup(&uptime, NULL);
+
+		wakeup = wakeup_real - time(NULL) + uptime;
+	}
+
+	cmd[0] = CMD_SET_WAKEUP;
+	put_unaligned_le32(wakeup, &cmd[1]);
+
+	cmd_write_mcu(cmd, sizeof(cmd));
+
+	if (wakeup)
+		print_wakeup_time(uptime, wakeup, wakeup_real);
+	else
+		printf("Wake up disabled.\n");
+}
+
+static void poweroff(uint16_t arg)
+{
+	uint32_t uptime, wakeup;
+	uint8_t cmd[9];
+
+	get_uptime_wakeup(&uptime, &wakeup);
+
+	printf("Powering the board off immediately!\n");
+	printf("This feature should be used from within kernel poweroff driver!\n");
+	printf("Data may be lost!\n");
+	printf("Power on with front is %s.\n",
+	       (arg & 1) ? "enabled" : "disabled");
+	print_wakeup_time(uptime, wakeup, time(NULL) - uptime + wakeup);
+	fflush(stdout);
+
+	/* wait 1 second for the messages to be print to the user */
+	sleep(1);
+
+	/*
+	 * This sends the power off command to the MCU, which immediately
+	 * disables voltage regulators.
+	 */
+	cmd[0] = CMD_POWER_OFF;
+	put_unaligned_le16(CMD_POWER_OFF_MAGIC, &cmd[1]);
+	put_unaligned_le16(arg, &cmd[3]);
+	put_unaligned_le32(crc32(0xffffffff, &cmd[1], 4), &cmd[5]);
+
+	cmd_write_mcu(cmd, sizeof(cmd));
 }
 
 static int printf_to_file(const char *path, const char *fmt, ...)
@@ -1181,7 +1353,30 @@ static void usage(void)
 	       "                               packet when receiving firmware back for\n"
 	       "                               comparison via the old flashing protocol\n"
 	       "                               to allow the firmware to process the packet\n"
-	       "                               (default %u ms)\n", READ_DELAY);
+	       "                               (default %u ms)\n\n", READ_DELAY);
+	printf(" Poweroff & wake up control options (use may interfere with kernel driver):\n");
+	printf("  -u, --wakeup-status          Show the configured wake up time from potential\n"
+	       "                               poweroff (see the --poweroff option) and the\n"
+	       "                               time since MCU firmware start\n\n");
+	printf("  -w, --wakeup=<TIMESTAMP>     Set wake up time from potential poweroff\n"
+	       "                               (see the --poweroff option). The TIMESTAMP can\n"
+	       "                               be absolute (e.g. \"YYYY-MM-DD hh:mm:ss\"),\n"
+	       "                               relative (e.g. \"+60 minutes\"), or \"unset\"\n"
+	       "                               to deconfigure wake up time\n\n");
+	printf("      --poweroff[=ARG]         DO NOT USE !!! Sends the POWER_OFF command to\n"
+	       "                               the MCU, whichimmediately disables the voltage\n"
+	       "                               regulators to the SOC and other peripherals,\n"
+	       "                               thus entering low power mode.\n"
+	       "                               This option is intended for debugging purposes,\n"
+	       "                               it SHOULD NOT BE USED since it skips the proper\n"
+	       "                               shutdown procedures of the operating system,\n"
+	       "                               which can potentially cause data loss!\n"
+	       "                               Instead the kernel should use this feature from\n"
+	       "                               within its system shutdown handlers.\n"
+	       "                               Once powered off, the board can be powered back\n"
+	       "                               on either by pressing the front button (unless\n"
+	       "                               ARG is 0), or at a specified time by configuring\n"
+	       "                               wake up time via the --wakeup option\n");
 }
 
 static const struct option long_options[] = {
@@ -1194,6 +1389,9 @@ static const struct option long_options[] = {
 	{ "even-if-unlocked",	no_argument,		NULL, 'E' },
 	{ "write-delay",	required_argument,	NULL, 'd' },
 	{ "read-delay",		required_argument,	NULL, 'D' },
+	{ "wakeup-status",	no_argument,		NULL, 'u' },
+	{ "wakeup",		required_argument,	NULL, 'w' },
+	{ "poweroff",		optional_argument,	NULL, 'p' },
 	{},
 };
 
@@ -1211,7 +1409,7 @@ int main(int argc, char *argv[])
 	while (1) {
 		int opt;
 
-		opt = getopt_long(argc, argv, "hvf:B", long_options, NULL);
+		opt = getopt_long(argc, argv, "hvf:Buw:", long_options, NULL);
 		if (opt == -1)
 			break;
 
@@ -1251,11 +1449,20 @@ int main(int argc, char *argv[])
 			break;
 		case 'd':
 			opts.write_delay = parse_uint_option("write-delay",
-							     optarg, 5000);
+							     optarg, 5000, -1);
 			break;
 		case 'D':
 			opts.read_delay = parse_uint_option("read-delay",
-							    optarg, 5000);
+							    optarg, 5000, -1);
+		case 'u':
+			print_uptime_wakeup();
+			break;
+		case 'w':
+			set_wakeup_time(optarg);
+			break;
+		case 'p':
+			poweroff(parse_uint_option("poweroff", optarg, -1,
+						   CMD_POWER_OFF_POWERON_BUTTON));
 			break;
 		default:
 			die_suggest_help(NULL);
