@@ -371,6 +371,11 @@ static int cmd_read_mcu(uint8_t cmd, void *buf, size_t len, bool fail_on_nxio)
 	return _cmd_read(I2C_ADDR_MCU, cmd, buf, len, fail_on_nxio);
 }
 
+static int cmd_read_led(uint8_t cmd, void *buf, size_t len, bool fail_on_nxio)
+{
+	return _cmd_read(I2C_ADDR_LED, cmd, buf, len, fail_on_nxio);
+}
+
 static void _cmd_write(i2c_addr_t addr, const void *buf, size_t len)
 {
 	struct i2c_rdwr_ioctl_data trans;
@@ -395,6 +400,11 @@ static void _cmd_write(i2c_addr_t addr, const void *buf, size_t len)
 static void cmd_write_mcu(const void *buf, size_t len)
 {
 	_cmd_write(I2C_ADDR_MCU, buf, len);
+}
+
+static void cmd_write_led(const void *buf, size_t len)
+{
+	_cmd_write(I2C_ADDR_LED, buf, len);
 }
 
 static int get_version(void *dst, bool bootloader)
@@ -901,6 +911,108 @@ static void set_usb_power(unsigned port, bool state)
 
 	printf("USB port %u (%s) power %s\n", port,
 	       port == 1 ? "rear" : "front", state ? "enabled" : "disabled");
+}
+
+static void print_leds_status(void)
+{
+	uint16_t features = get_features();
+	const char *gamma_status;
+	uint8_t brightness;
+
+	cmd_read_led(CMD_GET_BRIGHTNESS, &brightness, sizeof(brightness), true);
+
+	printf("Global LED brightness: %u%%\n", brightness);
+
+	if (features & FEAT_LED_GAMMA_CORRECTION) {
+		uint8_t gamma;
+
+		cmd_read_led(CMD_GET_GAMMA_CORRECTION, &gamma, sizeof(gamma),
+			     true);
+
+		gamma_status = gamma ? "enabled" : "disabled";
+	} else {
+		gamma_status = "not supported (you need to upgrade MCU firmware)";
+	}
+
+	printf("LED gamma correction is %s\n", gamma_status);
+}
+
+static void set_leds_brightness(uint8_t brightness)
+{
+	uint8_t cmd[2];
+
+	cmd[0] = CMD_SET_BRIGHTNESS;
+	cmd[1] = brightness;
+
+	cmd_write_mcu(&cmd, sizeof(cmd));
+
+	printf("Global LED brightness set to %u%%\n", brightness);
+}
+
+static void set_leds_gamma(bool state)
+{
+	uint8_t cmd[2];
+
+	assert_feature(LED_GAMMA_CORRECTION);
+
+	cmd[0] = CMD_SET_GAMMA_CORRECTION;
+	cmd[1] = state;
+
+	cmd_write_led(&cmd, sizeof(cmd));
+
+	printf("LED gamma correction %s\n", state ? "enabled" : "disabled");
+}
+
+static void stress_leds(void)
+{
+	struct timespec last;
+	unsigned int count;
+	uint8_t cmd[5];
+
+	cmd[0] = CMD_LED_MODE;
+	cmd[1] = 0x1c;
+	cmd_write_led(cmd, 2);
+
+	cmd[0] = CMD_LED_STATE;
+	cmd[1] = 0x1c;
+	cmd_write_led(cmd, 2);
+
+	cmd[0] = CMD_LED_COLOR;
+	cmd[1] = 0x0c;
+
+	clock_gettime(CLOCK_MONOTONIC, &last);
+	count = 0;
+
+	printf("LEDs stress test: sending command to change all LED colors\n");
+
+	while (1) {
+		struct timespec now;
+		time_t diff;
+
+#define CHANNEL_RISE_LOOP(chnls)				\
+		for (unsigned col = 0; col <= 255; col++) {	\
+			chnls = col;				\
+			cmd_write_led(cmd, 5);			\
+			++count;				\
+								\
+			clock_gettime(CLOCK_MONOTONIC, &now);	\
+			diff = now.tv_sec - last.tv_sec;	\
+			if (now.tv_nsec < last.tv_nsec)		\
+				diff -= 1;			\
+			if (diff >= 1) {			\
+				printf("%u cmds/sec\n", count);	\
+				last = now;			\
+				count = 0;			\
+			}					\
+		}
+		CHANNEL_RISE_LOOP(cmd[2])
+		CHANNEL_RISE_LOOP(cmd[2] = cmd[3])
+		CHANNEL_RISE_LOOP(cmd[3])
+		CHANNEL_RISE_LOOP(cmd[3] = cmd[4])
+		CHANNEL_RISE_LOOP(cmd[4])
+		CHANNEL_RISE_LOOP(cmd[2] = cmd[4])
+		CHANNEL_RISE_LOOP(cmd[2] = cmd[3] = cmd[4])
+	}
 }
 
 static int printf_to_file(const char *path, const char *fmt, ...)
@@ -1482,7 +1594,12 @@ static void usage(void)
 	printf(" USB port power control options (use may interfere with kernel driver):\n");
 	printf("      --usb-status             Show USB ports power regulator states\n");
 	printf("      --usb-port-0=<on|off>    Enable/disable power for front USB port\n");
-	printf("      --usb-port-1=<on|off>    Enable/disable power for rear USB port\n");
+	printf("      --usb-port-1=<on|off>    Enable/disable power for rear USB port\n\n");
+	printf(" LED control options (use may interfere with kernel driver):\n");
+	printf("      --leds-status            Print information about LEDs settings\n");
+	printf("      --leds-brightness=<VAL>  Set global LED brightness to VAL percent\n");
+	printf("      --leds-gamma=<on|off>    Enable/disable LEDs gamma correction\n");
+	printf("      --leds-stress-test       Stress the LEDs by rapidly changing colors\n");
 }
 
 static const struct option long_options[] = {
@@ -1504,6 +1621,10 @@ static const struct option long_options[] = {
 	{ "usb-status",		optional_argument,	NULL, 'U' },
 	{ "usb-port-0",		required_argument,	NULL, '0' },
 	{ "usb-port-1",		required_argument,	NULL, '1' },
+	{ "leds-status",	no_argument,		NULL, 'l' },
+	{ "leds-brightness",	required_argument,	NULL, 'L' },
+	{ "leds-gamma",		required_argument,	NULL, 'G' },
+	{ "leds-stress-test",	no_argument,		NULL, 'S' },
 	{},
 };
 
@@ -1566,6 +1687,19 @@ int main(int argc, char *argv[])
 		case 'D':
 			opts.read_delay = parse_uint_option("read-delay",
 							    optarg, 5000, -1);
+		case 'l':
+			print_leds_status();
+			break;
+		case 'L':
+			set_leds_brightness(parse_uint_option("leds-brightness",
+							      optarg, 100, -1));
+			break;
+		case 'G':
+			set_leds_gamma(parse_bool_option("leds-gamma", optarg));
+			break;
+		case 'S':
+			stress_leds();
+			break;
 		case 'u':
 			print_uptime_wakeup();
 			break;
