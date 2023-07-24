@@ -42,8 +42,6 @@
 	})
 
 #define DEV_NAME	"/dev/i2c-1"
-#define DEV_ADDR_BOOT	0x2c /* 0x2c for MCU in bootloader */
-#define DEV_ADDR_APP	0x2a /* 0x2a for MCU in application */
 #define FLASH_SIZE	43008 /* flash size, 42k for MCU */
 
 #define PKT_DATA_SZ	128 /* 128 data bytes in one packet when flashing */
@@ -169,7 +167,13 @@ static uint32_t crc32(uint32_t crc, const void *_data, uint32_t len)
 	return crc;
 }
 
-static int open_i2c(int addr)
+typedef enum {
+	I2C_ADDR_MCU = 0x2a,
+	I2C_ADDR_LED = 0x2b,
+	I2C_ADDR_BOOT = 0x2c,
+} i2c_addr_t;
+
+static int open_i2c(i2c_addr_t addr)
 {
 	int fd;
 
@@ -193,7 +197,7 @@ static void flash_old_send(const void *src, uint16_t offset, uint16_t size,
 	uint16_t sent;
 	int fd, i;
 
-	fd = open_i2c(DEV_ADDR_BOOT);
+	fd = open_i2c(I2C_ADDR_BOOT);
 
 	for (sent = 0, i = 1; sent < size; sent += PKT_DATA_SZ, ++i) {
 		struct {
@@ -244,7 +248,7 @@ static uint16_t flash_old_recv(void *dst, uint16_t offset, uint16_t size,
 	uint16_t rcvd, total = 0;
 	int fd, i;
 
-	fd = open_i2c(DEV_ADDR_BOOT);
+	fd = open_i2c(I2C_ADDR_BOOT);
 
 	for (rcvd = 0, i = 1; rcvd < size; rcvd += PKT_DATA_SZ, ++i) {
 		uint16_t addr, len;
@@ -290,15 +294,15 @@ static int _cmd_write_read(const void *wbuf, size_t wlen,
 
 	trans.msgs = msgs;
 	trans.nmsgs = 2;
-	msgs[0].addr = DEV_ADDR_APP;
+	msgs[0].addr = I2C_ADDR_MCU;
 	msgs[0].len = wlen;
 	msgs[0].buf = (void *)wbuf;
-	msgs[1].addr = DEV_ADDR_APP;
+	msgs[1].addr = I2C_ADDR_MCU;
 	msgs[1].flags = I2C_M_RD | I2C_M_STOP;
 	msgs[1].len = rlen;
 	msgs[1].buf = rbuf;
 
-	fd = open_i2c(DEV_ADDR_APP);
+	fd = open_i2c(I2C_ADDR_MCU);
 
 	ret = ioctl(fd, I2C_RDWR, &trans);
 	saved_errno = errno;
@@ -341,12 +345,12 @@ static void cmd_write(const void *buf, size_t len)
 
 	trans.msgs = msgs;
 	trans.nmsgs = 1;
-	msgs[0].addr = DEV_ADDR_APP;
+	msgs[0].addr = I2C_ADDR_MCU;
 	msgs[0].flags = I2C_M_STOP;
 	msgs[0].len = len;
 	msgs[0].buf = (void *)buf;
 
-	fd = open_i2c(DEV_ADDR_APP);
+	fd = open_i2c(I2C_ADDR_MCU);
 
 	if (ioctl(fd, I2C_RDWR, &trans) != 1)
 		die("%s: I2C transfer operation failed: %m", __func__);
@@ -582,7 +586,7 @@ static mcu_proto_t _get_mcu_proto(void)
 			return MCU_PROTO_BOOT_OLD;
 	} else {
 		/* For older bootloaders, poke bootloader address */
-		int fd = open_i2c(DEV_ADDR_BOOT);
+		int fd = open_i2c(I2C_ADDR_BOOT);
 		uint8_t c;
 		bool res;
 
