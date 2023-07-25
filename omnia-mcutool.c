@@ -1038,6 +1038,90 @@ static void stress_leds(void)
 	}
 }
 
+static void _print_wan_mode(uint16_t ext_control)
+{
+	printf("WAN SerDes mux endpoint:          %s (%s)\n",
+	       (ext_control & EXT_CTL_PHY_SFP) ? "WAN port" :
+						 "SFP cage",
+	       (ext_control & EXT_CTL_PHY_SFP_AUTO) ?
+			"automatically follows SFP module presence" :
+			"manually selected");
+}
+
+static void _print_sfp_status(uint32_t ext_status)
+{
+	printf("SFP cage module detected:         %s\n",
+	       (ext_status & EXT_STS_SFP_nDET) ? "no" : "yes");
+}
+
+static void print_wan_status(void)
+{
+	uint16_t ext_control;
+	uint32_t ext_status;
+
+	if (!(get_features() & FEAT_PERIPH_MCU))
+		die("WAN SerDes mux and SFP module presence are wired to MCU\n"
+		    "only board revisions 32+");
+
+	assert_feature(EXT_CMDS);
+
+	cmd_read_mcu(CMD_GET_EXT_STATUS_DWORD, &ext_status, sizeof(ext_status),
+		     true);
+	cmd_read_mcu(CMD_GET_EXT_CONTROL_STATUS, &ext_control,
+		     sizeof(ext_control), true);
+
+	_print_wan_mode(ext_control);
+	_print_sfp_status(ext_status);
+}
+
+static void set_wan_mode(const char *mode)
+{
+	uint16_t bits, mask;
+	const char *msg;
+
+	if (!(get_features() & FEAT_PERIPH_MCU))
+		die("WAN SerDes mux only available on board revisions 32+");
+
+	if (!strcasecmp(mode, "auto")) {
+		bits = EXT_CTL_PHY_SFP_AUTO;
+		mask = EXT_CTL_PHY_SFP_AUTO;
+		msg = "WAN SerDes mux configured to follow SFP module presence";
+	} else if (!strcasecmp(mode, "phy")) {
+		bits = EXT_CTL_PHY_SFP;
+		mask = EXT_CTL_PHY_SFP | EXT_CTL_PHY_SFP_AUTO;
+		msg = "WAN SerDes mux switched to WAN ethernet port";
+	} else if (!strcasecmp(mode, "sfp")) {
+		bits = 0;
+		mask = EXT_CTL_PHY_SFP | EXT_CTL_PHY_SFP_AUTO;
+		msg = "WAN SerDes mux switched to SFP cage";
+	} else {
+		die_of_unrecognized_arg("wan-mode", mode);
+	}
+
+	set_ext_ctl(bits, mask);
+	puts(msg);
+}
+
+static void print_wan_mode(void)
+{
+	uint16_t ext_control;
+
+	if (!(get_features() & FEAT_PERIPH_MCU))
+		die("WAN SerDes mux only available on board revisions 32+");
+
+	assert_feature(EXT_CMDS);
+
+	cmd_read_mcu(CMD_GET_EXT_CONTROL_STATUS, &ext_control,
+		     sizeof(ext_control), true);
+
+	if (ext_control & EXT_CTL_PHY_SFP_AUTO)
+		puts("auto");
+	else if (ext_control & EXT_CTL_PHY_SFP)
+		puts("phy");
+	else
+		puts("sfp");
+}
+
 static void print_gpio_status(void)
 {
 	uint16_t status, features;
@@ -1078,14 +1162,8 @@ static void print_gpio_status(void)
 
 		printf("\nBoard revision 32+ signals:\n\n");
 
-		printf("SFP cage module detected:         %s\n",
-		       (ext_status & EXT_STS_SFP_nDET) ? "no" : "yes");
-		printf("WAN SerDes mux endpoint:          %s (%s)\n",
-		       (ext_control & EXT_CTL_PHY_SFP) ? "WAN port" :
-							 "SFP cage",
-		       (ext_control & EXT_CTL_PHY_SFP_AUTO) ?
-				"automatically follows SFP module presence" :
-				"manually selected");
+		_print_sfp_status(ext_status);
+		_print_wan_mode(ext_control);
 		printf("eMMC reset asserted:              %s (reset is ignored by eMMC)\n",
 		       (ext_control & EXT_CTL_nRES_MMC) ? "no" : "yes");
 		printf("LAN switch reset asserted:        %s\n",
@@ -1768,6 +1846,14 @@ static void usage(void)
 	printf("      --leds-brightness=<VAL>  Set global LED brightness to VAL percent\n");
 	printf("      --leds-gamma=<on|off>    Enable/disable LEDs gamma correction\n");
 	printf("      --leds-stress-test       Stress the LEDs by rapidly changing colors\n\n");
+	printf(" WAN port / SFP cage control options (use may interfere with kernel driver):\n");
+	printf("      --wan-status             Print WAN status and SFP module presence status\n");
+	printf("      --wan-mode=<MODE>        Set WAN SerDes mux endpoint. MODE can be one of:\n"
+	       "                                 phy  : for WAN ethernet port (ethernet PHY)\n"
+	       "                                 sfp  : for SFP cage\n"
+	       "                                 auto : for SFP cage if SFP module is present,\n"
+	       "                                        otherwise to WAN ethernet port\n");
+	printf("      --get-wan-mode           Print WAN SerDes mux endpoint configuration\n\n");
 	printf(" GPIO control options (use may interfere with kernel driver):\n");
 	printf("      --gpio-status            Show status of MCU GPIO pins\n");
 	printf("      --gpio-set=<GPIO>        Set MCU GPIO pin. GPIO can be one of:\n"
@@ -1800,6 +1886,9 @@ static const struct option long_options[] = {
 	{ "leds-brightness",	required_argument,	NULL, 'L' },
 	{ "leds-gamma",		required_argument,	NULL, 'G' },
 	{ "leds-stress-test",	no_argument,		NULL, 'S' },
+	{ "wan-status",		no_argument,		NULL, 'N' },
+	{ "wan-mode",		required_argument,	NULL, 'm' },
+	{ "get-wan-mode",	no_argument,		NULL, 'M' },
 	{ "gpio-status",	no_argument,		NULL, 'g' },
 	{ "gpio-set",		required_argument,	NULL, 's' },
 	{ "gpio-clear",		required_argument,	NULL, 'c' },
@@ -1909,6 +1998,15 @@ int main(int argc, char *argv[])
 		case '1':
 			set_usb_power(1, parse_bool_option("usb-port-1",
 							   optarg));
+			break;
+		case 'N':
+			print_wan_status();
+			break;
+		case 'm':
+			set_wan_mode(optarg);
+			break;
+		case 'M':
+			print_wan_mode();
 			break;
 		case 'g':
 			print_gpio_status();
