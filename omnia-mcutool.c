@@ -1299,6 +1299,15 @@ static void set_gpio(const char *name, bool value)
 	printf("GPIO %s %s\n", name, value ? "set" : "cleared");
 }
 
+static void print_reset_selector(void)
+{
+	uint8_t reset;
+
+	cmd_read_mcu(CMD_GET_RESET, &reset, sizeof(reset), true);
+
+	printf("%u\n", reset);
+}
+
 static int printf_to_file(const char *path, const char *fmt, ...)
 {
 	int fd = open(path, O_WRONLY), res;
@@ -1906,7 +1915,11 @@ static void usage(void)
 	       "                                 usb0_pwr, usb1_pwr, nres_mmc, nres_lan,\n"
 	       "                                 nres_phy, nperst0, nperst1, nperst2, phy_sfp,\n"
 	       "                                 nvhv_ctrl\n");
-	printf("      --gpio-clear=<GPIO>      Clear MCU GPIO pin\n");
+	printf("      --gpio-clear=<GPIO>      Clear MCU GPIO pin\n\n");
+	printf(" Miscellaneous options:\n");
+	printf("      --goto-bootloader        Request the MCU firmware to jump to bootloader\n");
+	printf("      --reset-selector         Show selected factory reset level, determined\n"
+	       "                               by how long the rear reset button was held\n");
 }
 
 static const struct option long_options[] = {
@@ -1941,6 +1954,8 @@ static const struct option long_options[] = {
 	{ "gpio-status",	no_argument,		NULL, 'g' },
 	{ "gpio-set",		required_argument,	NULL, 's' },
 	{ "gpio-clear",		required_argument,	NULL, 'c' },
+	{ "goto-bootloader",	no_argument,		NULL, 'b' },
+	{ "reset-selector",	no_argument,		NULL, 'R' },
 	{},
 };
 
@@ -2074,6 +2089,12 @@ int main(int argc, char *argv[])
 			break;
 		case 'c':
 			set_gpio(optarg, false);
+			break;
+		case 'b':
+			goto_bootloader();
+			break;
+		case 'R':
+			print_reset_selector();
 			break;
 		default:
 			die_suggest_help(NULL);
