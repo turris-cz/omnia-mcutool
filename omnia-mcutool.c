@@ -247,8 +247,8 @@ void flash_file(char *filename) {
 }
 
 void usage(void) {
-	printf("mcu -- Turris Omnia MCU flash utility\n");
-	printf("Usage: mcu [COMMAND] [FILE].\n");
+	printf("omnia-mcutool -- Turris Omnia MCU flash utility\n");
+	printf("Usage: omnia-mcutool [COMMAND] [FILE].\n");
 	printf("  -h : Print this help.\n");
 	printf("  -v : Print version of MCU bootloader and app.\n");
 	printf("  -f [FILE] : Flash application image.\n");
