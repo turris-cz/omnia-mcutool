@@ -35,6 +35,7 @@
 #include "i2c_iface.h"
 #include "timeutils.h"
 
+#define ARRAY_SIZE(__x)	(sizeof((__x)) / sizeof((__x)[0]))
 #define MIN(a, b)				\
 	({					\
 		__auto_type ___a = (a);		\
@@ -107,6 +108,12 @@ static inline void die_suggest_help(const char *fmt, ...)
 	die("try the --help option for usage information");
 }
 
+__attribute__((__noreturn__))
+static void die_of_unrecognized_arg(const char *opt, const char *arg)
+{
+	die("unrecognized argument '%s' for option '--%s'", arg, opt);
+}
+
 static int parse_uint_option(const char *opt, const char *arg, int max, int def)
 {
 	unsigned long val;
@@ -140,7 +147,7 @@ static bool parse_bool_option(const char *opt, const char *arg)
 		 !strcasecmp(optarg, "disable") || !strcmp(optarg, "0"))
 		return false;
 	else
-		die("unrecognized argument '%s' for option '--%s'", arg, opt);
+		die_of_unrecognized_arg(opt, arg);
 }
 
 static void *xmalloc(size_t size)
@@ -509,6 +516,19 @@ static void _assert_feature(uint16_t mask, const char *name)
 }
 
 #define assert_feature(_n) _assert_feature(FEAT_ ## _n, #_n)
+
+static void set_ext_ctl(uint16_t bits, uint16_t mask)
+{
+	uint8_t cmd[5];
+
+	assert_feature(EXT_CMDS);
+
+	cmd[0] = CMD_EXT_CONTROL;
+	put_unaligned_le16(bits, &cmd[1]);
+	put_unaligned_le16(mask, &cmd[3]);
+
+	cmd_write_mcu(&cmd, sizeof(cmd));
+}
 
 static uint16_t get_bootloader_features(void)
 {
@@ -884,10 +904,8 @@ static void set_watchdog_timeout(uint32_t timeout)
 	printf("Watchdog timeout set to %u seconds\n", timeout);
 }
 
-static void print_usb_status(void)
+static void _print_usb_status(uint16_t status)
 {
-	uint16_t status = get_status_word();
-
 	printf("USB port 0 (front) power enabled: %s\n",
 	       (status & STS_USB30_PWRON) ? "yes" : "no");
 	printf("USB port 0 (front) overcurrent:   %s\n",
@@ -896,6 +914,11 @@ static void print_usb_status(void)
 	       (status & STS_USB31_PWRON) ? "yes" : "no");
 	printf("USB port 1 (rear) overcurrent:    %s\n",
 	       (status & STS_USB31_OVC) ? "yes (WARNING!)" : "no");
+}
+
+static void print_usb_status(void)
+{
+	_print_usb_status(get_status_word());
 }
 
 static void set_usb_power(unsigned port, bool state)
@@ -1013,6 +1036,151 @@ static void stress_leds(void)
 		CHANNEL_RISE_LOOP(cmd[2] = cmd[4])
 		CHANNEL_RISE_LOOP(cmd[2] = cmd[3] = cmd[4])
 	}
+}
+
+static void print_gpio_status(void)
+{
+	uint16_t status, features;
+	uint32_t ext_status;
+
+	status = get_status_word();
+
+	printf("MiniPCIe/mSATA port card present: %s\n",
+	       (status & STS_CARD_DET) ? "yes" : "no");
+	printf("MiniPCIe/mSATA port card type:    %s\n",
+	       (status & STS_CARD_DET) ? (status & STS_MSATA_IND) ? "mSATA" :
+								    "MiniPCIe" :
+					 "none");
+	printf("Front button is pressed:          %s (%s)\n",
+	       (status & STS_BUTTON_PRESSED) ? "yes" : "no",
+	       (status & STS_BUTTON_MODE) ?
+			"press events handled by CPU" :
+			"pressing changes global LED brightness");
+	_print_usb_status(status);
+
+	features = get_features();
+
+	if (!(features & FEAT_EXT_CMDS)) {
+		printf("Cannot read status of other GPIO pins\n");
+		printf("(MCU firmware does not support the EXT_CMDS feature.\n"
+		       " You need to upgrade MCU firmware.)\n");
+		return;
+	}
+
+	cmd_read_mcu(CMD_GET_EXT_STATUS_DWORD, &ext_status, sizeof(ext_status),
+		     true);
+
+	if (features & FEAT_PERIPH_MCU) {
+		uint16_t ext_control;
+
+		cmd_read_mcu(CMD_GET_EXT_CONTROL_STATUS, &ext_control,
+			     sizeof(ext_control), true);
+
+		printf("\nBoard revision 32+ signals:\n\n");
+
+		printf("SFP cage module detected:         %s\n",
+		       (ext_status & EXT_STS_SFP_nDET) ? "no" : "yes");
+		printf("WAN SerDes mux endpoint:          %s (%s)\n",
+		       (ext_control & EXT_CTL_PHY_SFP) ? "WAN port" :
+							 "SFP cage",
+		       (ext_control & EXT_CTL_PHY_SFP_AUTO) ?
+				"automatically follows SFP module presence" :
+				"manually selected");
+		printf("eMMC reset asserted:              %s (reset is ignored by eMMC)\n",
+		       (ext_control & EXT_CTL_nRES_MMC) ? "no" : "yes");
+		printf("LAN switch reset asserted:        %s\n",
+		       (ext_control & EXT_CTL_nRES_LAN) ? "no" : "yes");
+		printf("WAN PHY reset asserted:           %s\n",
+		       (ext_control & EXT_CTL_nRES_PHY) ? "no" : "yes");
+		printf("MiniPCIe port 0 reset asserted:   %s\n",
+		       (ext_control & EXT_CTL_nPERST0) ? "no" : "yes");
+		printf("MiniPCIe port 1 reset asserted:   %s\n",
+		       (ext_control & EXT_CTL_nPERST1) ? "no" : "yes");
+		printf("MiniPCIe port 2 reset asserted:   %s\n",
+		       (ext_control & EXT_CTL_nPERST2) ? "no" : "yes");
+		printf("VHV voltage regulator:            %s\n",
+		       (ext_control & EXT_CTL_nVHV_CTRL) ? "disabled" :
+							   "enabled");
+	}
+
+	if (features & FEAT_LED_STATE_EXT_MASK) {
+		bool v32 = (features & FEAT_LED_STATE_EXT_MASK) ==
+			   FEAT_LED_STATE_EXT_V32;
+		char wan_char = v32 ? '*' : 'L';
+
+		printf("\nPeripheral LED signals:\n\n");
+
+		printf("Port 0 W%cAN/mSATA LED pin active: %s\n", wan_char,
+		       (ext_status & EXT_STS_WLAN0_MSATA_LED) ? "yes" : "no");
+		if (!v32)
+			printf("Port 0 WPAN LED pin active:        %s\n",
+			       (ext_status & EXT_STS_WPAN0_LED) ? "yes" : "no");
+		printf("Port 1 W%cAN LED pin active:       %s\n", wan_char,
+		       (ext_status & EXT_STS_WLAN1_LED) ? "yes" : "no");
+		if (!v32)
+			printf("Port 1 WPAN LED pin active:        %s\n",
+			       (ext_status & EXT_STS_WPAN1_LED) ? "yes" : "no");
+		printf("Port 2 W%cAN LED pin active:       %s\n", wan_char,
+		       (ext_status & EXT_STS_WLAN2_LED) ? "yes" : "no");
+		if (!v32)
+			printf("Port 2 WPAN LED pin active:        %s\n",
+			       (ext_status & EXT_STS_WPAN2_LED) ? "yes" : "no");
+#define PRINT_LAN_LEDS(n)							\
+		printf("Switch port %u LED 0 pin active:   %s\n", n,		\
+		       (ext_status & EXT_STS_LAN ## n ## _LED0) ? "yes" : "no");\
+		printf("Switch port %u LED 1 pin active:   %s\n", n,		\
+		       (ext_status & EXT_STS_LAN ## n ## _LED0) ? "yes" : "no");
+		PRINT_LAN_LEDS(0)
+		PRINT_LAN_LEDS(1)
+		PRINT_LAN_LEDS(2)
+		PRINT_LAN_LEDS(3)
+		PRINT_LAN_LEDS(4)
+		printf("Switch CPU port LED 0 pin active: %s\n",
+		       (ext_status & EXT_STS_LAN5_LED0) ? "yes" : "no");
+		printf("Switch CPU port LED 1 pin active: %s\n",
+		       (ext_status & EXT_STS_LAN5_LED1) ? "yes" : "no");
+	}
+}
+
+static void set_gpio(const char *name, bool value)
+{
+	static const struct {
+		const char *name;
+		bool ext_ctl;
+		uint16_t mask;
+	} gpios[] = {
+		{ "usb0_pwr",  false, CTL_USB30_PWRON },
+		{ "usb1_pwr",  false, CTL_USB31_PWRON },
+		{ "nres_mmc",  true,  EXT_CTL_nRES_MMC },
+		{ "nres_lan",  true,  EXT_CTL_nRES_LAN },
+		{ "nres_phy",  true,  EXT_CTL_nRES_PHY },
+		{ "nperst0",   true,  EXT_CTL_nPERST0 },
+		{ "nperst1",   true,  EXT_CTL_nPERST1 },
+		{ "nperst2",   true,  EXT_CTL_nPERST2 },
+		{ "phy_sfp",   true,  EXT_CTL_PHY_SFP },
+		{ "nvhv_ctrl", true,  EXT_CTL_nVHV_CTRL },
+	};
+	unsigned idx;
+
+	for (idx = 0; idx < ARRAY_SIZE(gpios); ++idx)
+		if (!strcasecmp(gpios[idx].name, name))
+			break;
+
+	if (idx == ARRAY_SIZE(gpios))
+		die_of_unrecognized_arg(value ? "gpio-set" : "gpio-clear",
+					name);
+
+	if (gpios[idx].ext_ctl) {
+		if (!(get_features() & FEAT_PERIPH_MCU))
+			die("GPIO %s is only wired on board revisions 32+",
+			    name);
+
+		set_ext_ctl(value ? gpios[idx].mask : 0, gpios[idx].mask);
+	} else {
+		set_control(value ? gpios[idx].mask : 0, gpios[idx].mask);
+	}
+
+	printf("GPIO %s %s\n", name, value ? "set" : "cleared");
 }
 
 static int printf_to_file(const char *path, const char *fmt, ...)
@@ -1599,7 +1767,14 @@ static void usage(void)
 	printf("      --leds-status            Print information about LEDs settings\n");
 	printf("      --leds-brightness=<VAL>  Set global LED brightness to VAL percent\n");
 	printf("      --leds-gamma=<on|off>    Enable/disable LEDs gamma correction\n");
-	printf("      --leds-stress-test       Stress the LEDs by rapidly changing colors\n");
+	printf("      --leds-stress-test       Stress the LEDs by rapidly changing colors\n\n");
+	printf(" GPIO control options (use may interfere with kernel driver):\n");
+	printf("      --gpio-status            Show status of MCU GPIO pins\n");
+	printf("      --gpio-set=<GPIO>        Set MCU GPIO pin. GPIO can be one of:\n"
+	       "                                 usb0_pwr, usb1_pwr, nres_mmc, nres_lan,\n"
+	       "                                 nres_phy, nperst0, nperst1, nperst2, phy_sfp,\n"
+	       "                                 nvhv_ctrl\n");
+	printf("      --gpio-clear=<GPIO>      Clear MCU GPIO pin\n");
 }
 
 static const struct option long_options[] = {
@@ -1625,6 +1800,9 @@ static const struct option long_options[] = {
 	{ "leds-brightness",	required_argument,	NULL, 'L' },
 	{ "leds-gamma",		required_argument,	NULL, 'G' },
 	{ "leds-stress-test",	no_argument,		NULL, 'S' },
+	{ "gpio-status",	no_argument,		NULL, 'g' },
+	{ "gpio-set",		required_argument,	NULL, 's' },
+	{ "gpio-clear",		required_argument,	NULL, 'c' },
 	{},
 };
 
@@ -1731,6 +1909,15 @@ int main(int argc, char *argv[])
 		case '1':
 			set_usb_power(1, parse_bool_option("usb-port-1",
 							   optarg));
+			break;
+		case 'g':
+			print_gpio_status();
+			break;
+		case 's':
+			set_gpio(optarg, true);
+			break;
+		case 'c':
+			set_gpio(optarg, false);
 			break;
 		default:
 			die_suggest_help(NULL);
