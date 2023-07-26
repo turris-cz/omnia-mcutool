@@ -43,6 +43,8 @@
 		___a < ___b ? ___a : ___b;	\
 	})
 
+#define MCU_FW_PATH	"/usr/share/omnia-mcu-firmware"
+
 #define DEV_NAME	"/dev/i2c-1"
 #define FLASH_SIZE	43008 /* flash size, 42k for MCU */
 
@@ -153,6 +155,16 @@ static bool parse_bool_option(const char *opt, const char *arg)
 static void *xmalloc(size_t size)
 {
 	void *res = malloc(size);
+
+	if (!res)
+		die("out of memory");
+
+	return res;
+}
+
+static char *xstrdup(const char *s)
+{
+	char *res = strdup(s);
 
 	if (!res)
 		die("out of memory");
@@ -623,7 +635,7 @@ static void print_board_firmware_type(void)
 	printf("Board firmware type: %s\n", get_firmware_prefix());
 }
 
-static void print_checksum(void)
+static bool get_length_checksum(uint32_t *length, uint32_t *checksum)
 {
 	uint32_t buf[2];
 
@@ -632,13 +644,29 @@ static void print_checksum(void)
 	 * either fails or returns all ones.
 	 */
 	if (cmd_read_mcu(CMD_GET_FW_CHECKSUM, &buf, sizeof(buf), false) < 0)
-		return;
+		return false;
 
 	if (buf[0] == 0xffffffff)
+		return false;
+
+	if (length)
+		*length = le32toh(buf[0]);
+
+	if (checksum)
+		*checksum = le32toh(buf[1]);
+
+	return true;
+}
+
+static void print_checksum(void)
+{
+	uint32_t length, checksum;
+
+	if (!get_length_checksum(&length, &checksum))
 		return;
 
-	printf("Application firmware length: %u Bytes\n", le32toh(buf[0]));
-	printf("Application firmware checksum: %#010x\n", le32toh(buf[1]));
+	printf("Application firmware length: %u Bytes\n", length);
+	printf("Application firmware checksum: %#010x\n", checksum);
 }
 
 typedef enum {
@@ -1482,21 +1510,25 @@ static const char *mcutype2str(uint8_t mcu_type)
 }
 
 static bool get_image_info(const char *image, size_t size, uint8_t *mcu_typep,
-			   bool *bootloaderp, uint32_t *featuresp)
+			   bool *bootloaderp, uint32_t *featuresp,
+			   uint32_t *checksump)
 {
 	bool expected_bootloader, bootloader;
 	uint8_t expected_mcu_type, mcu_type;
+	size_t checksum_pos = 0;
 	features_t feat;
 
 	if (get_image_features(&feat, image, size, 0xc8)) {
 		expected_bootloader = false;
 		expected_mcu_type = feat.status_features & STS_MCU_TYPE_MASK;
+		checksum_pos = 0xc4;
 	} else if (get_image_features(&feat, image, size, 0xd4)) {
 		expected_bootloader = true;
 		expected_mcu_type = feat.status_features & STS_MCU_TYPE_MASK;
 	} else if (get_image_features(&feat, image, size, 0x118)) {
 		expected_bootloader = false;
 		expected_mcu_type = STS_MCU_TYPE_GD32;
+		checksum_pos = 0x114;
 	} else if (get_image_features(&feat, image, size, 0x124)) {
 		expected_bootloader = true;
 		expected_mcu_type = STS_MCU_TYPE_GD32;
@@ -1526,6 +1558,15 @@ static bool get_image_info(const char *image, size_t size, uint8_t *mcu_typep,
 
 	if (featuresp)
 		*featuresp = feat.features | (feat.status_features << 16);
+
+	if (checksump && !bootloader) {
+		if (checksum_pos) {
+			memcpy(checksump, &image[checksum_pos], 4);
+			*checksump = le32toh(*checksump);
+		} else {
+			*checksump = 0xffffffff;
+		}
+	}
 
 	return true;
 }
@@ -1672,23 +1713,49 @@ static void flash_firmware_new_proto(const char *image, size_t size,
 		putchar('\n');
 }
 
+static const uint8_t both_message_apis_commit[VERSION_HASHLEN] = {
+	0xeb, 0x5c, 0x9a, 0x8d, 0xd9, 0xec, 0xa5, 0xd1, 0xdd, 0x71,
+	0x96, 0x26, 0x87, 0xf7, 0x6d, 0x8d, 0x14, 0x2f, 0xd1, 0xe2,
+};
+
+static bool fw_supports_both_message_apis(bool bootloader)
+{
+	uint8_t version[VERSION_HASHLEN];
+
+	if (get_version(version, bootloader) < 0)
+		die("cannot get %s version to check for messaging API",
+		    bootloader ? "bootloader" : "application");
+
+	if (!bootloader) {
+		uint16_t features = get_features();
+
+		if (!(features & FEAT_BOOTLOADER) &&
+		    (features & FEAT_NEW_MESSAGE_API) &&
+		    (features & FEAT_CAN_OLD_MESSAGE_API))
+			return true;
+	}
+
+	return !memcmp(version, both_message_apis_commit, VERSION_HASHLEN);
+}
+
+static const char *msg_bootloader_flash_needs_force =
+	"Flashing MCU's bootloader firmware is DANGEROUS: if a power failure or other\n"
+	"event interrupts the flashing process (which lasts several seconds), you will\n"
+	"end up with a bricked board, and you will either need to buy debug cables, or\n"
+	"send the board to Turris' customer support to have it fixed.\n\n"
+	"To proceed, add the --force option. You have been warned!";
+
 static void check_flashing(const char *image, size_t size,
 			   const flash_opts_t *opts, mcu_proto_t mcu_proto)
 {
-	static const uint8_t both_message_apis_commit[VERSION_HASHLEN] = {
-		0xeb, 0x5c, 0x9a, 0x8d, 0xd9, 0xec, 0xa5, 0xd1, 0xdd, 0x71,
-		0x96, 0x26, 0x87, 0xf7, 0x6d, 0x8d, 0x14, 0x2f, 0xd1, 0xe2,
-	};
 	bool image_supports_both_message_apis;
-	bool fw_supports_both_message_apis;
-	uint8_t version[VERSION_HASHLEN];
 	uint16_t features, status;
 	bool image_is_bootloader;
 	uint32_t image_features;
 	uint8_t image_mcu_type;
 
 	if (!get_image_info(image, size, &image_mcu_type, &image_is_bootloader,
-			    &image_features))
+			    &image_features, NULL))
 		return;
 
 	if (image_is_bootloader != opts->bootloader)
@@ -1731,20 +1798,11 @@ static void check_flashing(const char *image, size_t size,
 	if (image_supports_both_message_apis)
 		return;
 
-	if (get_version(version, !opts->bootloader) < 0)
-		die("cannot get %s version to check for messaging API",
-		    opts->bootloader ? "application" : "bootloader");
+	if (fw_supports_both_message_apis(!opts->bootloader))
+		return;
 
 	if (!opts->bootloader && !(features & FEAT_BOOTLOADER))
 		features = get_bootloader_features();
-
-	fw_supports_both_message_apis =
-		((features & FEAT_NEW_MESSAGE_API) &&
-		 (features & FEAT_CAN_OLD_MESSAGE_API)) ||
-		!memcmp(version, both_message_apis_commit, VERSION_HASHLEN);
-
-	if (fw_supports_both_message_apis)
-		return;
 
 	if ((features & FEAT_NEW_MESSAGE_API) !=
 	    (image_features & FEAT_NEW_MESSAGE_API))
@@ -1763,16 +1821,11 @@ static void check_flashing(const char *image, size_t size,
 
 	if (opts->bootloader && !opts->force)
 		die("flashing MCU's bootloader firmware is a dangerous operation!\n"
-		    "Flashing MCU's bootloader firmware is DANGEROUS: if a power failure or other\n"
-		    "event interrupts the flashing process (which lasts several seconds), you will\n"
-		    "end up with a bricked board, and you will either need to buy debug cables, or\n"
-		    "send the board to Turris' customer support to have it fixed.\n\n"
-		    "To proceed, add the --force option. You have been warned!");
+		    "%s", msg_bootloader_flash_needs_force);
 }
 
-static void flash_firmware(const char *firmware, const flash_opts_t *opts)
+static char *read_firmware(const char *firmware, size_t *sizep)
 {
-	mcu_proto_t mcu_proto;
 	ssize_t size;
 	char *image;
 	int fd;
@@ -1780,12 +1833,28 @@ static void flash_firmware(const char *firmware, const flash_opts_t *opts)
 	image = xmalloc(FLASH_SIZE);
 
 	if ((fd = open(firmware, O_RDONLY)) < 0)
-		die("failed to open file '%s': %m", firmware);
+		goto err_free;
 
 	if ((size = read(fd, image, FLASH_SIZE)) <= 0)
-		die("failed to read file '%s': %m", firmware);
+		goto err_close;
 
 	close(fd);
+
+	*sizep = size;
+
+	return image;
+
+err_close:
+	close(fd);
+err_free:
+	free(image);
+	return NULL;
+}
+
+static void _flash_firmware(const char *firmware, char *image, size_t size,
+			    const flash_opts_t *opts)
+{
+	mcu_proto_t mcu_proto;
 
 	mcu_proto = get_mcu_proto();
 
@@ -1821,6 +1890,150 @@ static void flash_firmware(const char *firmware, const flash_opts_t *opts)
 	}
 }
 
+static void flash_firmware(const char *firmware, const flash_opts_t *opts)
+{
+	char *image;
+	size_t size;
+
+	image = read_firmware(firmware, &size);
+	if (!image)
+		die("failed to read firmware %s: %m", firmware);
+
+	_flash_firmware(firmware, image, size, opts);
+
+	free(image);
+}
+
+static char *request_firmware(bool bootloader, bool v2_99, uint32_t *featuresp,
+			      uint32_t *checksump, char **imagep, size_t *sizep)
+{
+	static char fw_path[128];
+	char *image;
+	size_t size;
+
+	snprintf(fw_path, sizeof(fw_path), "%s/%s%s.%s.bin", MCU_FW_PATH,
+		 v2_99 ? "v2.99/" : "", get_firmware_prefix(),
+		 bootloader ? "boot" : "app");
+
+	image = read_firmware(fw_path, &size);
+	if (!image || !get_image_info(image, size, NULL, NULL, featuresp,
+				      checksump)) {
+		char *fname = strrchr(fw_path, '/');
+		*fname++ = '\0';
+
+		die("Firmware file %s/%s %s!\n"
+		    "Please download the file from the following URL:\n"
+		    "  https://gitlab.nic.cz/turris/hw/omnia_hw_ctrl/-/releases/%s/downloads/%s\n"
+		    "into the\n"
+		    "  %s\n"
+		    "directory.", fw_path, fname,
+		    image ? "is invalid" : "not found",
+		    v2_99 ? "v2.99" : "permalink/latest", fname, fw_path);
+	}
+
+	*imagep = image;
+	*sizep = size;
+
+	return xstrdup(fw_path);
+}
+
+static void upgrade(const flash_opts_t *_opts)
+{
+	uint32_t image_features, image_checksum, checksum;
+	char *path, *image, version[VERSION_HASHLEN];
+	flash_opts_t opts = *_opts;
+	size_t size;
+
+	/*
+	 * First request the latest application firmware and check whether the
+	 * current bootloader is able to flash it (if it supports the same
+	 * messaging passing API).
+	 */
+	path = request_firmware(false, false, &image_features, &image_checksum,
+				&image, &size);
+
+	/* Check whether we need to upgrade */
+	if (get_length_checksum(NULL, &checksum) && checksum == image_checksum &&
+	    !get_version(version, false) &&
+	    memmem(image, size, version, VERSION_HASHLEN)) {
+		puts("Application firmware is up to date.");
+		return;
+	}
+
+	if (!fw_supports_both_message_apis(true) &&
+	    !(get_bootloader_features() & FEAT_NEW_MESSAGE_API) !=
+	    !(image_features & FEAT_NEW_MESSAGE_API) &&
+	    !(image_features & FEAT_CAN_OLD_MESSAGE_API)) {
+		/*
+		 * Bootloader firmware in MCU does not support the message
+		 * passing API as the new application firmware. We first need to
+		 * take care of this.
+		 */
+
+		if (!(get_features() & FEAT_BOOTLOADER) &&
+		    fw_supports_both_message_apis(false)) {
+			/*
+			 * If MCU is running application that supports both
+			 * message passing APIs, we can flash newest bootloader.
+			 */
+			char *path, *image;
+			size_t size;
+
+			if (!opts.force)
+				die("further upgrade requires flashing MCU's bootloader firmware.\n"
+				    "%s", msg_bootloader_flash_needs_force);
+
+			path = request_firmware(true, false, NULL, NULL, &image,
+						&size);
+
+			opts.bootloader = true;
+			_flash_firmware(path, image, size, &opts);
+			free(image);
+			free(path);
+
+			puts("\nSuccesfully flashed newest bootloader.");
+		} else {
+			/*
+			 * Otherwise we first need to flash application firmware
+			 * v2.99 that supports both message passing APIs and
+			 * request a reboot.
+			 */
+			char *path, *image;
+			size_t size;
+
+			path = request_firmware(false, true, NULL, NULL, &image,
+						&size);
+
+			opts.bootloader = false;
+			_flash_firmware(path, image, size, &opts);
+			free(image);
+			free(path);
+
+			puts("\n"
+			     "Flashed temporary application firmware needed for further upgrade.\n"
+			     "Please reboot and run\n"
+			     "  omnia-mcutool --upgrade\n"
+			     "again.");
+
+			return;
+		}
+	}
+
+	/*
+	 * Now we have either ensured that the bootloader is compatible, or we
+	 * have flashed newest bootloader. We can now flash newest application.
+	 */
+
+	opts.bootloader = false;
+	_flash_firmware(path, image, size, &opts);
+	free(image);
+	free(path);
+
+	puts("\n"
+	     "Flashed newest application firmware.\n"
+	     "Please reboot.");
+}
+
 static void usage(void)
 {
 	printf("Usage: omnia-mcutool [OPTION]...\n\n");
@@ -1831,6 +2044,7 @@ static void usage(void)
 	printf(" Firmware flashing options:\n");
 	printf("  -v, --firmware-version       Print version of the MCU bootloader and\n"
 	       "                               application firmware\n\n");
+	printf("      --upgrade                Upgrade to the newest MCU firmware\n\n");
 	printf("  -f, --firmware=<FILE>        Flash MCU firmware from file FILE\n\n");
 	printf("  -B, --flash-bootloader       DANGEROUS !!! THIS MAY BRICK YOUR BOARD !!!\n"
 	       "                               Flash bootloader firmware instead of application\n"
@@ -1926,6 +2140,7 @@ static const struct option long_options[] = {
 	{ "help",		no_argument,		NULL, 'h' },
 	{ "version",		no_argument,		NULL, 'V' },
 	{ "firmware-version",	no_argument,		NULL, 'v' },
+	{ "upgrade",		no_argument,		NULL, 'A' },
 	{ "firmware",		required_argument,	NULL, 'f' },
 	{ "flash-bootloader",	no_argument,		NULL, 'B' },
 	{ "force",		no_argument,		NULL, 'F' },
@@ -1961,12 +2176,12 @@ static const struct option long_options[] = {
 
 int main(int argc, char *argv[])
 {
+	bool opt_given = false, do_upgrade = false;
 	flash_opts_t opts = {
 		.write_delay = WRITE_DELAY,
 		.read_delay = READ_DELAY,
 	};
 	const char *firmware = NULL;
-	bool opt_given = false;
 
 	argv0 = argv[0];
 
@@ -1996,6 +2211,9 @@ int main(int argc, char *argv[])
 			print_board_firmware_type();
 			print_features();
 			print_checksum();
+			break;
+		case 'A':
+			do_upgrade = true;
 			break;
 		case 'f':
 			if (firmware)
@@ -2109,7 +2327,13 @@ int main(int argc, char *argv[])
 	if (!opt_given)
 		die_suggest_help("no options given");
 
-	if (firmware) {
+	if (do_upgrade && (firmware || opts.bootloader ||
+			   opts.even_if_unlocked))
+		die("option '--upgrade' cannot be used with option '--firmware', '--flash-bootloader' nor '--even-if-unlocked'");
+
+	if (do_upgrade) {
+		upgrade(&opts);
+	} else if (firmware) {
 		flash_firmware(firmware, &opts);
 		if (opts.bootloader)
 			puts("MCU's bootloader firmware flashed successfuly.");
