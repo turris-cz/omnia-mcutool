@@ -1122,6 +1122,48 @@ static void print_wan_mode(void)
 		puts("sfp");
 }
 
+static void _print_button_status(uint16_t status)
+{
+	printf("Front button is pressed:          %s (%s)\n",
+	       (status & STS_BUTTON_PRESSED) ? "yes" : "no",
+	       (status & STS_BUTTON_MODE) ?
+			"press events handled by CPU" :
+			"pressing changes global LED brightness");
+}
+
+static void print_button_status(void)
+{
+	_print_button_status(get_status_word());
+}
+
+static void set_button_mode(const char *mode)
+{
+	uint8_t bits, mask = CTL_BUTTON_MODE;
+	const char *msg;
+
+	if (!strcasecmp(mode, "mcu")) {
+		bits = 0;
+		msg = "change LED brightness";
+	} else if (!strcasecmp(mode, "cpu")) {
+		bits = mask;
+		msg = "be handled by CPU";
+	} else {
+		die_of_unrecognized_arg("button-mode", mode);
+	}
+
+	set_control(bits, mask);
+
+	printf("Front button configured to %s\n", msg);
+}
+
+static void print_button_mode(void)
+{
+	if (get_status_word() & STS_BUTTON_MODE)
+		puts("cpu");
+	else
+		puts("mcu");
+}
+
 static void print_gpio_status(void)
 {
 	uint16_t status, features;
@@ -1135,11 +1177,7 @@ static void print_gpio_status(void)
 	       (status & STS_CARD_DET) ? (status & STS_MSATA_IND) ? "mSATA" :
 								    "MiniPCIe" :
 					 "none");
-	printf("Front button is pressed:          %s (%s)\n",
-	       (status & STS_BUTTON_PRESSED) ? "yes" : "no",
-	       (status & STS_BUTTON_MODE) ?
-			"press events handled by CPU" :
-			"pressing changes global LED brightness");
+	_print_button_status(status);
 	_print_usb_status(status);
 
 	features = get_features();
@@ -1854,6 +1892,14 @@ static void usage(void)
 	       "                                 auto : for SFP cage if SFP module is present,\n"
 	       "                                        otherwise to WAN ethernet port\n");
 	printf("      --get-wan-mode           Print WAN SerDes mux endpoint configuration\n\n");
+	printf(" Front button control options (use may interfere with kernel driver):\n");
+	printf("      --button-status          Print front button status\n");
+	printf("      --button-mode=<MODE>     Configure front button mode. MODE can be one of:\n"
+	       "                                 mcu : pressing the front button is handled by\n"
+	       "                                       MCU to change global LED brightness\n"
+	       "                                 cpu : pressing the front button is handled by\n"
+	       "                                       CPU (needs kernel driver)\n");
+	printf("      --get-button-mode        Print configured button mode\n\n");
 	printf(" GPIO control options (use may interfere with kernel driver):\n");
 	printf("      --gpio-status            Show status of MCU GPIO pins\n");
 	printf("      --gpio-set=<GPIO>        Set MCU GPIO pin. GPIO can be one of:\n"
@@ -1889,6 +1935,9 @@ static const struct option long_options[] = {
 	{ "wan-status",		no_argument,		NULL, 'N' },
 	{ "wan-mode",		required_argument,	NULL, 'm' },
 	{ "get-wan-mode",	no_argument,		NULL, 'M' },
+	{ "button-status",	no_argument,		NULL, 'Z' },
+	{ "button-mode",	required_argument,	NULL, 'k' },
+	{ "get-button-mode",	no_argument,		NULL, 'K' },
 	{ "gpio-status",	no_argument,		NULL, 'g' },
 	{ "gpio-set",		required_argument,	NULL, 's' },
 	{ "gpio-clear",		required_argument,	NULL, 'c' },
@@ -2007,6 +2056,15 @@ int main(int argc, char *argv[])
 			break;
 		case 'M':
 			print_wan_mode();
+			break;
+		case 'Z':
+			print_button_status();
+			break;
+		case 'k':
+			set_button_mode(optarg);
+			break;
+		case 'K':
+			print_button_mode();
 			break;
 		case 'g':
 			print_gpio_status();
