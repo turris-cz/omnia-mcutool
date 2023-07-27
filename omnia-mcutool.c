@@ -187,11 +187,11 @@ static uint16_t flash_recv(void *dst, uint16_t offset, uint16_t size)
 	return total;
 }
 
-static void cmd_read(uint8_t cmd, void *buf, size_t len)
+static int cmd_read(uint8_t cmd, void *buf, size_t len, bool fail_on_nxio)
 {
 	struct i2c_rdwr_ioctl_data trans;
 	struct i2c_msg msgs[2] = {};
-	int fd;
+	int ret, fd, saved_errno;
 
 	trans.msgs = msgs;
 	trans.nmsgs = 2;
@@ -205,10 +205,16 @@ static void cmd_read(uint8_t cmd, void *buf, size_t len)
 
 	fd = open_i2c(DEV_ADDR_APP);
 
-	if (ioctl(fd, I2C_RDWR, &trans) != 2)
-		die("%s: I2C transfer operation failed: %m", __func__);
+	ret = ioctl(fd, I2C_RDWR, &trans);
+	saved_errno = errno;
 
 	close(fd);
+
+	if ((fail_on_nxio && ret != 2) || (ret < 0 && saved_errno != ENXIO))
+		die("%s: I2C transfer operation failed: %m", __func__);
+
+	errno = saved_errno;
+	return ret < 0 ? ret : 0;
 }
 
 static void cmd_write(const void *buf, size_t len)
@@ -234,19 +240,22 @@ static void cmd_write(const void *buf, size_t len)
 
 static void print_version(bool bootloader)
 {
+	const char *pfx = bootloader ? "Bootloader version: " :
+				       "Application version:";
 	char buf[VERSION_HASHLEN];
 
-	cmd_read(bootloader ? CMD_GET_FW_VERSION_BOOT :
-			      CMD_GET_FW_VERSION_APP,
-		 buf, VERSION_HASHLEN);
+	if (cmd_read(bootloader ? CMD_GET_FW_VERSION_BOOT :
+				  CMD_GET_FW_VERSION_APP,
+		     buf, VERSION_HASHLEN, false) < 0) {
+		printf("%s unavailable (MCU is in bootloader)\n", pfx);
+	} else {
+		printf("%s ", pfx);
 
-	printf("%s", bootloader ? "Bootloader version:  " :
-				  "Application version: ");
+		for (int i = 0; i < VERSION_HASHLEN; i++)
+			printf("%02x", buf[i]);
 
-	for (int i = 0; i < VERSION_HASHLEN; i++)
-		printf("%02x", buf[i]);
-
-	printf("\n");
+		putchar('\n');
+	}
 }
 
 static void goto_bootloader(void)
