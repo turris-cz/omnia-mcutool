@@ -26,6 +26,13 @@
 #include <time.h>
 #include <getopt.h>
 
+#define MIN(a, b)				\
+	({					\
+		__auto_type ___a = (a);		\
+		__auto_type ___b = (b);		\
+		___a < ___b ? ___a : ___b;	\
+	})
+
 #define DEV_NAME	"/dev/i2c-1"
 #define PAGE_SIZE	128 /* bytes in page mode I2C transfer, 128 for MCU */
 #define ADDR_SIZE	2 /* 2 bytes address length in I2C transfer */
@@ -113,7 +120,7 @@ static void writebuff(char *buff, int startaddr, int len)
 	fflush(stdout);
 	for (offset = 0; offset < len; offset += PAGE_SIZE) {
 		set_addr(b, startaddr + offset);
-		size = len - offset < PAGE_SIZE ? len - offset : PAGE_SIZE;
+		size = MIN(len - offset, PAGE_SIZE);
 
 		memcpy(b + ADDR_SIZE, buff + offset, size);
 
@@ -147,7 +154,7 @@ static int readbuff(char *buff, int startaddr, int len)
 
 	for (offset = 0; offset < len; offset += PAGE_SIZE) {
 		set_addr(b, startaddr + offset);
-		size = len - offset < PAGE_SIZE ? len - offset : PAGE_SIZE;
+		size = MIN(len - offset, PAGE_SIZE);
 
 		if (write(fd, b, ADDR_SIZE) != 2)
 			die("\nI2C write operation failed: %m");
