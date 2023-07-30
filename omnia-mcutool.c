@@ -34,14 +34,14 @@
 	})
 
 #define DEV_NAME	"/dev/i2c-1"
-#define PAGE_SIZE	128 /* bytes in page mode I2C transfer, 128 for MCU */
-#define ADDR_SIZE	2 /* 2 bytes address length in I2C transfer */
 #define DEV_ADDR_BOOT	0x2c /* 0x2c for MCU in bootloader */
 #define DEV_ADDR_APP	0x2a /* 0x2a for MCU in application */
 #define FLASH_SIZE	43008 /* flash size, 42k for MCU */
+
+#define PKT_ADDR_SZ	2 /* 2 bytes in one packet for address */
+#define PKT_DATA_SZ	128 /* 128 data bytes in one packet when flashing */
 #define WRITE_DELAY	20 /* ms */
 #define RETRY		3
-
 #define FILE_CMP_OK	0xBB /* bootloader flash protocol code: flash OK */
 #define FILE_CMP_ERROR	0xDD /* bootloader flash protocol code: flash failed */
 #define ADDR_CMP	0xFFFF /* bootloader flash protocol code addr */
@@ -112,23 +112,23 @@ static void writebuff(char *buff, int startaddr, int len)
 		.tv_nsec = WRITE_DELAY * 1000000,
 	};
 	int size, offset, fd, r, w;
-	char b[PAGE_SIZE + ADDR_SIZE];
+	char b[PKT_DATA_SZ + PKT_ADDR_SZ];
 
 	fd = open_i2c(DEV_ADDR_BOOT);
 
 	printf("Writing data ");
 	fflush(stdout);
-	for (offset = 0; offset < len; offset += PAGE_SIZE) {
+	for (offset = 0; offset < len; offset += PKT_DATA_SZ) {
 		set_addr(b, startaddr + offset);
-		size = MIN(len - offset, PAGE_SIZE);
+		size = MIN(len - offset, PKT_DATA_SZ);
 
-		memcpy(b + ADDR_SIZE, buff + offset, size);
+		memcpy(b + PKT_ADDR_SZ, buff + offset, size);
 
 		for (r = 1; r <= RETRY; r++) {
-			w = write(fd, b, size + ADDR_SIZE);
+			w = write(fd, b, size + PKT_ADDR_SZ);
 			nanosleep(&delay, NULL);
 
-			if (w != size + ADDR_SIZE) {
+			if (w != size + PKT_ADDR_SZ) {
 				if (r == RETRY)
 					die("\nI2C write operation failed");
 			} else
@@ -148,15 +148,15 @@ static void writebuff(char *buff, int startaddr, int len)
 static int readbuff(char *buff, int startaddr, int len)
 {
 	int size, offset, fd, rb, readtotal = 0;
-	char b[ADDR_SIZE];
+	char b[PKT_ADDR_SZ];
 
 	fd = open_i2c(DEV_ADDR_BOOT);
 
-	for (offset = 0; offset < len; offset += PAGE_SIZE) {
+	for (offset = 0; offset < len; offset += PKT_DATA_SZ) {
 		set_addr(b, startaddr + offset);
-		size = MIN(len - offset, PAGE_SIZE);
+		size = MIN(len - offset, PKT_DATA_SZ);
 
-		if (write(fd, b, ADDR_SIZE) != 2)
+		if (write(fd, b, PKT_ADDR_SZ) != 2)
 			die("\nI2C write operation failed: %m");
 
 		rb = read(fd, buff + offset, size);
