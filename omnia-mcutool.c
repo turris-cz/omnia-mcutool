@@ -13,6 +13,7 @@
  */
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -25,6 +26,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <getopt.h>
+#include <endian.h>
 
 #define MIN(a, b)				\
 	({					\
@@ -38,7 +40,6 @@
 #define DEV_ADDR_APP	0x2a /* 0x2a for MCU in application */
 #define FLASH_SIZE	43008 /* flash size, 42k for MCU */
 
-#define PKT_ADDR_SZ	2 /* 2 bytes in one packet for address */
 #define PKT_DATA_SZ	128 /* 128 data bytes in one packet when flashing */
 #define WRITE_DELAY	20 /* ms */
 #define RETRY		3
@@ -99,85 +100,91 @@ static int open_i2c(int addr)
 	return fd;
 }
 
-static void set_addr(char buf[], int addr)
-{
-	buf[0] = (addr & 0xFF00) >> 8;
-	buf[1] = (addr & 0xFF);
-}
-
-static void writebuff(char *buff, int startaddr, int len)
+static void flash_send(const void *src, uint16_t offset, uint16_t size)
 {
 	struct timespec delay = {
 		.tv_sec = 0,
 		.tv_nsec = WRITE_DELAY * 1000000,
 	};
-	int size, offset, fd, r, w;
-	char b[PKT_DATA_SZ + PKT_ADDR_SZ];
+	uint16_t sent;
+	int fd, i;
 
 	fd = open_i2c(DEV_ADDR_BOOT);
 
-	printf("Writing data ");
-	fflush(stdout);
-	for (offset = 0; offset < len; offset += PKT_DATA_SZ) {
-		set_addr(b, startaddr + offset);
-		size = MIN(len - offset, PKT_DATA_SZ);
+	for (sent = 0, i = 1; sent < size; sent += PKT_DATA_SZ, ++i) {
+		struct {
+			uint16_t addr;
+			char data[PKT_DATA_SZ];
+		} pkt;
+		uint16_t len, pktlen;
 
-		memcpy(b + PKT_ADDR_SZ, buff + offset, size);
+		pkt.addr = htobe16(offset + sent);
 
-		for (r = 1; r <= RETRY; r++) {
-			w = write(fd, b, size + PKT_ADDR_SZ);
+		len = MIN(size - sent, PKT_DATA_SZ);
+		memcpy(pkt.data, src + sent, len);
+
+		pktlen = sizeof(pkt.addr) + len;
+
+		for (unsigned try = 1; try <= RETRY; ++try) {
+			ssize_t res = write(fd, &pkt, pktlen);
 			nanosleep(&delay, NULL);
 
-			if (w != size + PKT_ADDR_SZ) {
-				if (r == RETRY)
+			if (res != pktlen) {
+				if (try == RETRY)
 					die("\nI2C write operation failed");
 			} else
 				break; /* Retry loop. */
 		}
 
-		printf("w");
+		putchar('w');
+		if (!(i % 64))
+			putchar('\n');
 		fflush(stdout);
 	}
 
 	close(fd);
 
-	printf("\n");
-	fflush(stdout);
+	if ((i % 64) != 1)
+		putchar('\n');
 }
 
-static int readbuff(char *buff, int startaddr, int len)
+static uint16_t flash_recv(void *dst, uint16_t offset, uint16_t size)
 {
-	int size, offset, fd, rb, readtotal = 0;
-	char b[PKT_ADDR_SZ];
+	uint16_t rcvd, total = 0;
+	int fd, i;
 
 	fd = open_i2c(DEV_ADDR_BOOT);
 
-	for (offset = 0; offset < len; offset += PKT_DATA_SZ) {
-		set_addr(b, startaddr + offset);
-		size = MIN(len - offset, PKT_DATA_SZ);
+	for (rcvd = 0, i = 1; rcvd < size; rcvd += PKT_DATA_SZ, ++i) {
+		uint16_t addr, len;
+		ssize_t res;
 
-		if (write(fd, b, PKT_ADDR_SZ) != 2)
+		addr = htobe16(offset + rcvd);
+		if (write(fd, &addr, sizeof(addr)) != sizeof(addr))
 			die("\nI2C write operation failed: %m");
 
-		rb = read(fd, buff + offset, size);
-		if (rb < 0)
+		len = MIN(size - rcvd, PKT_DATA_SZ);
+		res = read(fd, dst + rcvd, len);
+		if (res < 0)
 			die("\nI2C read operation failed: %m");
 
-		readtotal += rb;
+		total += res;
 
-		printf("r");
+		putchar('r');
+		if (!(i % 64))
+			putchar('\n');
 		fflush(stdout);
 
-		if (rb < size)
+		if (res < len)
 			break;
 	}
 
 	close(fd);
 
-	printf("\n");
-	fflush(stdout);
+	if ((i % 64) != 1)
+		putchar('\n');
 
-	return readtotal;
+	return total;
 }
 
 static void read_version(char version[], char cmd)
@@ -225,7 +232,7 @@ static void print_bootloader_version(void)
 
 static void write_cmp_result(char result)
 {
-	writebuff(&result, ADDR_CMP, 1);
+	flash_send(&result, ADDR_CMP, 1);
 }
 
 static void goto_bootloader(void)
@@ -252,7 +259,8 @@ static void goto_bootloader(void)
 static void flash_file(char *filename)
 {
 	int fd, size, rsize;
-	char buff[FLASH_SIZE], rbuff[FLASH_SIZE], result;
+	char buff[FLASH_SIZE], rbuff[FLASH_SIZE];
+	uint8_t result;
 
 	if ((fd = open(filename, O_RDONLY)) < 0)
 		die("failed to open file: %m");
@@ -262,11 +270,12 @@ static void flash_file(char *filename)
 
 	close(fd);
 
-	printf("File %s (%d B):", filename, size);
-	writebuff(buff, 0, size);
+	printf("File %s (%d B)\n", filename, size);
+	printf("Sending data...\n");
+	flash_send(buff, 0, size);
 
-	printf("Readback from MCU: ");
-	rsize = readbuff(rbuff, 0, size);
+	printf("Receiving data for comparison...\n");
+	rsize = flash_recv(rbuff, 0, size);
 
 	if ((rsize != size) || memcmp(buff, rbuff, size)) {
 		printf("WARNING: Readback failed!\n");
@@ -276,6 +285,10 @@ static void flash_file(char *filename)
 		result = FILE_CMP_OK;
 	}
 
+	if (result == FILE_CMP_OK)
+		puts("Confirming success to MCU...");
+	else
+		puts("Informing MCU about failure...");
 	write_cmp_result(result);
 }
 
