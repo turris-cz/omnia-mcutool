@@ -47,7 +47,8 @@
 #define FLASH_SIZE	43008 /* flash size, 42k for MCU */
 
 #define PKT_DATA_SZ	128 /* 128 data bytes in one packet when flashing */
-#define WRITE_DELAY	20 /* ms */
+#define WRITE_DELAY	20 /* default write delay in ms for old protocol */
+#define READ_DELAY	0 /* default read delay in ms for old protocol */
 #define RETRY		3
 #define FILE_CMP_OK	0xBB /* bootloader flash protocol code: flash OK */
 #define FILE_CMP_ERROR	0xDD /* bootloader flash protocol code: flash failed */
@@ -60,6 +61,10 @@ typedef struct {
 	bool bootloader;
 	bool force;
 	bool even_if_unlocked;
+
+	/* old flashing protocol parameters */
+	unsigned write_delay;
+	unsigned read_delay;
 } flash_opts_t;
 
 static const char *argv0;
@@ -101,6 +106,23 @@ static inline void die_suggest_help(const char *fmt, ...)
 		error(fmt, __builtin_va_arg_pack());
 
 	die("try the --help option for usage information");
+}
+
+static int parse_uint_option(const char *opt, const char *arg, int max)
+{
+	unsigned long val;
+	char *end;
+
+	val = strtoul(arg, &end, 10);
+
+	if (*arg == '\0' || *end != '\0')
+		die("invalid argument '%s' for integer option '--%s'", arg,
+		    opt);
+	else if (max >= 0 && val > max)
+		die("value %s of option '--%s' exceeds maximum value %i", arg,
+		    opt, max);
+
+	return val;
 }
 
 static void *xmalloc(size_t size)
@@ -161,11 +183,12 @@ static int open_i2c(int addr)
 	return fd;
 }
 
-static void flash_old_send(const void *src, uint16_t offset, uint16_t size)
+static void flash_old_send(const void *src, uint16_t offset, uint16_t size,
+			   unsigned write_delay)
 {
 	struct timespec delay = {
-		.tv_sec = 0,
-		.tv_nsec = WRITE_DELAY * 1000000,
+		.tv_sec = write_delay / 1000,
+		.tv_nsec = (write_delay % 1000) * 1000000,
 	};
 	uint16_t sent;
 	int fd, i;
@@ -188,7 +211,9 @@ static void flash_old_send(const void *src, uint16_t offset, uint16_t size)
 
 		for (unsigned try = 1; try <= RETRY; ++try) {
 			ssize_t res = write(fd, &pkt, pktlen);
-			nanosleep(&delay, NULL);
+
+			if (write_delay)
+				nanosleep(&delay, NULL);
 
 			if (res != pktlen) {
 				if (try == RETRY)
@@ -209,8 +234,13 @@ static void flash_old_send(const void *src, uint16_t offset, uint16_t size)
 		putchar('\n');
 }
 
-static uint16_t flash_old_recv(void *dst, uint16_t offset, uint16_t size)
+static uint16_t flash_old_recv(void *dst, uint16_t offset, uint16_t size,
+			       unsigned read_delay)
 {
+	struct timespec delay = {
+		.tv_sec = read_delay / 1000,
+		.tv_nsec = (read_delay % 1000) * 1000000,
+	};
 	uint16_t rcvd, total = 0;
 	int fd, i;
 
@@ -228,6 +258,9 @@ static uint16_t flash_old_recv(void *dst, uint16_t offset, uint16_t size)
 		res = read(fd, dst + rcvd, len);
 		if (res < 0)
 			die("\nI2C read operation failed: %m");
+
+		if (read_delay)
+			nanosleep(&delay, NULL);
 
 		total += res;
 
@@ -635,18 +668,19 @@ static void goto_bootloader(void)
 	sleep(BOOTLOADER_TRANS_DELAY);
 }
 
-static void flash_firmware_old_proto(const char *image, uint16_t size)
+static void flash_firmware_old_proto(const char *image, uint16_t size,
+				     const flash_opts_t *opts)
 {
 	uint16_t rsize;
 	uint8_t result;
 	char *rimage;
 
 	printf("Sending data...\n");
-	flash_old_send(image, 0, size);
+	flash_old_send(image, 0, size, opts->write_delay);
 
 	printf("Receiving data for comparison...\n");
 	rimage = xmalloc(size);
-	rsize = flash_old_recv(rimage, 0, size);
+	rsize = flash_old_recv(rimage, 0, size, opts->read_delay);
 
 	if (rsize != size) {
 		error("read back only %u B, expected %u B!", rsize, size);
@@ -666,7 +700,7 @@ static void flash_firmware_old_proto(const char *image, uint16_t size)
 	else
 		printf("Informing MCU about failure... ");
 
-	flash_old_send(&result, ADDR_CMP, 1);
+	flash_old_send(&result, ADDR_CMP, 1, opts->write_delay);
 
 	if (result != FILE_CMP_OK)
 		die("flashing new firmware failed");
@@ -1083,7 +1117,7 @@ static void flash_firmware(const char *firmware, const flash_opts_t *opts)
 	switch (get_mcu_proto()) {
 	case MCU_PROTO_BOOT_OLD:
 		printf("Using old flashing protocol to flash MCU application.\n");
-		flash_firmware_old_proto(image, size);
+		flash_firmware_old_proto(image, size, opts);
 		break;
 
 	case MCU_PROTO_BOOT_NEW:
@@ -1123,7 +1157,16 @@ static void usage(void)
 	       "                               You have been warned!\n\n");
 	printf("      --force                  Force flashing bootloader firmware\n\n");
 	printf("      --even-if-unlocked       Force flashing even if the flashing state machine\n"
-	       "                               of the new flashing protocol is already unlocked\n");
+	       "                               of the new flashing protocol is already unlocked\n\n");
+	printf("      --write-delay=<DELAY>    Wait DELAY milliseconds after each sent packet\n"
+	       "                               when sending firmware via the old flashing\n"
+	       "                               protocol to allow the firmware to process the\n"
+	       "                               packet (default %u ms)\n\n", WRITE_DELAY);
+	printf("      --read-delay=<DELAY>     Read DELAY milliseconds after each received\n"
+	       "                               packet when receiving firmware back for\n"
+	       "                               comparison via the old flashing protocol\n"
+	       "                               to allow the firmware to process the packet\n"
+	       "                               (default %u ms)\n", READ_DELAY);
 }
 
 static const struct option long_options[] = {
@@ -1134,13 +1177,18 @@ static const struct option long_options[] = {
 	{ "flash-bootloader",	no_argument,		NULL, 'B' },
 	{ "force",		no_argument,		NULL, 'F' },
 	{ "even-if-unlocked",	no_argument,		NULL, 'E' },
+	{ "write-delay",	required_argument,	NULL, 'd' },
+	{ "read-delay",		required_argument,	NULL, 'D' },
 	{},
 };
 
 int main(int argc, char *argv[])
 {
+	flash_opts_t opts = {
+		.write_delay = WRITE_DELAY,
+		.read_delay = READ_DELAY,
+	};
 	const char *firmware = NULL;
-	flash_opts_t opts = {};
 	bool opt_given = false;
 
 	argv0 = argv[0];
@@ -1185,6 +1233,14 @@ int main(int argc, char *argv[])
 			break;
 		case 'B':
 			opts.bootloader = true;
+			break;
+		case 'd':
+			opts.write_delay = parse_uint_option("write-delay",
+							     optarg, 5000);
+			break;
+		case 'D':
+			opts.read_delay = parse_uint_option("read-delay",
+							    optarg, 5000);
 			break;
 		default:
 			die_suggest_help(NULL);
