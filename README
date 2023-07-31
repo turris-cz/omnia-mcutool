@@ -1,7 +1,0 @@
-This program interacts with Omnia MCU over I2C bus. It displays version
-of the MCU firmware - both bootloader and application parts (which are
-the git hashes compiled into the images) and flash application image
-to the MCU EEPROM.
-
-Copyright (C) 2016, 2022, 2023 CZ.NIC
-
