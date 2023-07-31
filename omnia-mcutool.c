@@ -71,6 +71,10 @@ static void set_addr(char buf[], int addr)
 
 static void writebuff(char *buff, int startaddr, int len)
 {
+	struct timespec delay = {
+		.tv_sec = 0,
+		.tv_nsec = WRITE_DELAY * 1000000,
+	};
 	int size, offset, fd, r, w;
 	char b[PAGE_SIZE + ADDR_SIZE];
 
@@ -86,8 +90,7 @@ static void writebuff(char *buff, int startaddr, int len)
 
 		for (r = 1; r <= RETRY; r++) {
 			w = write(fd, b, size + ADDR_SIZE);
-			nanosleep((const struct timespec[]){{0, (WRITE_DELAY*1000000L)}},
-				  NULL);
+			nanosleep(&delay, NULL);
 
 			if (w != size + ADDR_SIZE) {
 				if (r == RETRY) {
