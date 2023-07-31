@@ -230,11 +230,6 @@ static void print_bootloader_version(void)
 	print_version(buf);
 }
 
-static void write_cmp_result(char result)
-{
-	flash_send(&result, ADDR_CMP, 1);
-}
-
 static void goto_bootloader(void)
 {
 	int fd;
@@ -258,38 +253,46 @@ static void goto_bootloader(void)
 
 static void flash_file(char *filename)
 {
-	int fd, size, rsize;
-	char buff[FLASH_SIZE], rbuff[FLASH_SIZE];
+	char image[FLASH_SIZE], rimage[FLASH_SIZE];
+	ssize_t size, rsize;
 	uint8_t result;
+	int fd;
 
 	if ((fd = open(filename, O_RDONLY)) < 0)
 		die("failed to open file: %m");
 
-	if ((size = read(fd, buff, FLASH_SIZE)) <= 0)
+	if ((size = read(fd, image, FLASH_SIZE)) <= 0)
 		die("failed to read file: %m");
 
 	close(fd);
 
-	printf("File %s (%d B)\n", filename, size);
+	printf("File %s (%zd B)\n", filename, size);
 	printf("Sending data...\n");
-	flash_send(buff, 0, size);
+	flash_send(image, 0, size);
 
 	printf("Receiving data for comparison...\n");
-	rsize = flash_recv(rbuff, 0, size);
+	rsize = flash_recv(rimage, 0, size);
 
-	if ((rsize != size) || memcmp(buff, rbuff, size)) {
-		printf("WARNING: Readback failed!\n");
+	if (rsize != size) {
+		error("read back only %zd B, expected %zd B!", rsize, size);
+		result = FILE_CMP_ERROR;
+	} else if (memcmp(image, rimage, size)) {
+		error("read back buffer different from sent buffer!");
 		result = FILE_CMP_ERROR;
 	} else {
-		printf("SUCCESS: Readback OK.\n");
+		puts("Read back buffer comparison successful.");
 		result = FILE_CMP_OK;
 	}
 
 	if (result == FILE_CMP_OK)
-		puts("Confirming success to MCU...");
+		printf("Confirming success to MCU... ");
 	else
-		puts("Informing MCU about failure...");
-	write_cmp_result(result);
+		printf("Informing MCU about failure... ");
+
+	flash_send(&result, ADDR_CMP, 1);
+
+	if (result != FILE_CMP_OK)
+		die("flashing new firmware failed");
 }
 
 static void usage(void)
