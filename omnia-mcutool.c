@@ -86,6 +86,15 @@ static inline void die(const char *fmt, ...)
 	exit(EXIT_FAILURE);
 }
 
+__attribute__((__noreturn__, __always_inline__, __format__(__printf__, 1, 2)))
+static inline void die_suggest_help(const char *fmt, ...)
+{
+	if (fmt)
+		error(fmt, __builtin_va_arg_pack());
+
+	die("try the --help option for usage information");
+}
+
 static int open_i2c(int addr)
 {
 	int fd;
@@ -587,32 +596,54 @@ static const struct option long_options[] = {
 
 int main(int argc, char *argv[])
 {
-	int opt;
+	char *firmware = NULL;
+	bool opt_given = false;
 
 	argv0 = argv[0];
 
-	opt = getopt_long(argc, argv, "hvf:", long_options, NULL);
-	switch (opt) {
-	case 'h':
-		usage();
-		break;
-	case 'v':
-		print_version(true);
-		print_version(false);
-		print_mcu_type();
-		print_board_firmware_type();
-		print_features();
-		print_checksum();
-		break;
-	case 'f':
+	while (1) {
+		int opt;
+
+		opt = getopt_long(argc, argv, "hvf:", long_options, NULL);
+		if (opt == -1)
+			break;
+
+		switch (opt) {
+		case 'h':
+			usage();
+			break;
+		case 'v':
+			print_version(true);
+			print_version(false);
+			print_mcu_type();
+			print_board_firmware_type();
+			print_features();
+			print_checksum();
+			break;
+		case 'f':
+			if (firmware)
+				die("option '--firmware' already given");
+			firmware = optarg;
+			break;
+		default:
+			die_suggest_help(NULL);
+		}
+
+		opt_given = true;
+	}
+
+	if (optind < argc)
+		die_suggest_help("extra operand '%s'", argv[optind]);
+
+	if (!opt_given)
+		die_suggest_help("no options given");
+
+	if (firmware) {
 		unbind_drivers();
 		if (!is_in_bootloader())
 			goto_bootloader();
-		flash_file(optarg);
+		flash_file(firmware);
 		printf("Writing finished. Please reboot!\n");
-		break;
-	default:
-		die("try the --help option for usage information");
 	}
 
 	return EXIT_SUCCESS;
