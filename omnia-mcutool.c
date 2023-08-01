@@ -83,10 +83,11 @@ static int open_i2c(int addr)
 	int fd;
 
 	if ((fd = open(DEV_NAME, O_RDWR)) < 0)
-		die("failed to open I2C bus: %m");
+		die("failed to open I2C bus %s@0x%02x: %m", DEV_NAME, addr);
 
 	if (ioctl(fd, I2C_SLAVE_FORCE, addr) < 0)
-		die("failed to acquire bus access and/or talk to slave: %m");
+		die("failed to acquire bus access and/or talk to slave %s@0x%02x: %m",
+		    DEV_NAME, addr);
 
 	return fd;
 }
