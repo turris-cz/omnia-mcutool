@@ -1862,7 +1862,7 @@ static void _flash_firmware(const char *firmware, char *image, size_t size,
 
 	if (opts->bootloader && mcu_proto != MCU_PROTO_APP)
 		die("MCU is already in bootloader, cannot flash bootloader!\n"
-		    "You first need to reboot, or flash application image and"
+		    "You first need to reboot, or flash application image and\n"
 		    "reboot, and only then flash bootloader.");
 
 	unbind_drivers();
