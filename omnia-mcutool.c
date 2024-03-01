@@ -1754,10 +1754,17 @@ static void check_flashing(const char *image, size_t size,
 	uint32_t image_features;
 	uint8_t image_mcu_type;
 
-	if (opts->bootloader && mcu_proto != MCU_PROTO_APP)
-		die("MCU is already in bootloader, cannot flash bootloader!\n"
-		    "You first need to reboot, or flash application image and\n"
-		    "reboot, and only then flash bootloader.");
+	if (opts->bootloader) {
+		if (mcu_proto != MCU_PROTO_APP)
+			die("MCU is already in bootloader, cannot flash bootloader!\n"
+			    "You first need to reboot, or flash application image and\n"
+			    "reboot, and only then flash bootloader.");
+
+		features = get_features();
+		if (!(features & FEAT_FLASHING))
+			die("MCU application does not support flashing bootloader!\n"
+			    "(Boards with MKL MCU may forbid flashing bootloader.)");
+	}
 
 	if (!get_image_info(image, size, &image_mcu_type, &image_is_bootloader,
 			    &image_features, NULL))
