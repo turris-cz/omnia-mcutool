@@ -33,6 +33,16 @@ It can:
 - and finally show the selected factory reset level that the user selected by
   holding the rear reset button (`--reset-selector`).
 
+On boards where board information and board cryptography is implemented by
+the microcontroller, it also supports the following subcommands:
+
+- `serial-number` or `serial` to show board serial number,
+- `mac-address` or `mac` to show board first MAC address,
+- `public-key`, `pubkey` or `key` to show board ECDSA public key,
+- `sign` to generate an ECDSA signature of a given file with board private key,
+- and `sign-hash` to generate an ECDSA signature of a given sha256 hash with
+  board private key.
+
 ## MCU firmware binaries
 
 You can find the MCU firmware binaries at
@@ -47,6 +57,8 @@ in the `/usr/share/omnia-mcu-firmware/v2.99` directory.
 ## Build
 
 The program requires building with GCC. Clang is not tested.
+
+It depends on OpenSSL's `libcrypto`.
 
 Simply run `make` with the appropriate `CC` and `CFLAGS` settings.
 

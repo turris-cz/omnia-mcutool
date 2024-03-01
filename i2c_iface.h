@@ -51,6 +51,18 @@ enum commands_e {
 	CMD_GET_UPTIME_AND_WAKEUP	= 0x23,
 	CMD_POWER_OFF			= 0x24,
 
+	/* available if TRNG bit set in features */
+	CMD_TRNG_COLLECT_ENTROPY	= 0x28,
+
+	/* available if CRYPTO bit set in features */
+	CMD_CRYPTO_GET_PUBLIC_KEY	= 0x29,
+	CMD_CRYPTO_SIGN_MESSAGE		= 0x2A,
+	CMD_CRYPTO_COLLECT_SIGNATURE	= 0x2B,
+
+	/* available if BOARD_INFO it set in features */
+	CMD_BOARD_INFO_GET		= 0x2C,
+	CMD_BOARD_INFO_BURN		= 0x2D,
+
 	/* available only at address 0x2b (led-controller) */
 	/* available only if LED_GAMMA_CORRECTION bit set in features */
 	CMD_SET_GAMMA_CORRECTION	= 0x30,
@@ -119,7 +131,10 @@ enum features_e {
 	FEAT_NEW_MESSAGE_API		= BIT(9),
 	FEAT_BRIGHTNESS_INT		= BIT(10),
 	FEAT_POWEROFF_WAKEUP		= BIT(11),
-	FEAT_CAN_OLD_MESSAGE_API	= BIT(12)
+	FEAT_CAN_OLD_MESSAGE_API	= BIT(12),
+	FEAT_TRNG			= BIT(13),
+	FEAT_CRYPTO			= BIT(14),
+	FEAT_BOARD_INFO			= BIT(15),
 };
 
 enum ext_sts_dword_e {

@@ -1,5 +1,5 @@
 /*
- * omnia-mcutool CRC32 for some MCU commands checksumming
+ * omnia-mcutool subcommands
  *
  * Copyright (C) 2024 Marek Behún
  *
@@ -8,11 +8,10 @@
  * as published by the Free Software Foundation; either version 2
  * of the License, or (at your option) any later version.
  */
-#ifndef CRC32_H
-#define CRC32_H
+#ifndef SUBCOMMAND_H
+#define SUBCOMMAND_H
 
-#include <stdint.h>
+__attribute__((__noreturn__))
+void find_and_handle_subcommand(int argc, char *argv[]);
 
-uint32_t crc32(uint32_t crc, const void *_data, uint32_t len);
-
-#endif /* CRC32_H */
+#endif /* !SUBCOMMAND_H */

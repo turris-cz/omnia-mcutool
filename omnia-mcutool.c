@@ -4,7 +4,7 @@
  * the git hashes compiled into the images) and flash application image
  * to the MCU EEPROM.
  *
- * Copyright (C) 2016, 2022, 2023 CZ.NIC
+ * Copyright (C) 2016, 2022, 2023. 2024 CZ.NIC
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -12,8 +12,6 @@
  * of the License, or (at your option) any later version.
  */
 
-#define _GNU_SOURCE
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -23,8 +21,6 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 #include <sys/ioctl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
@@ -34,16 +30,9 @@
 #include "crc32.h"
 #include "i2c_iface.h"
 #include "timeutils.h"
-
-#define ARRAY_SIZE(__x)	(sizeof((__x)) / sizeof((__x)[0]))
-#define MIN(a, b)				\
-	({					\
-		__auto_type ___a = (a);		\
-		__auto_type ___b = (b);		\
-		___a < ___b ? ___a : ___b;	\
-	})
-
-#define MCU_FW_PATH	"/usr/share/omnia-mcu-firmware"
+#include "subcommand.h"
+#include "defs.h"
+#include "utils.h"
 
 #define DEV_NAME	"/dev/i2c-1"
 #define FLASH_SIZE	43008 /* flash size, 42k for MCU */
@@ -68,156 +57,6 @@ typedef struct {
 	unsigned write_delay;
 	unsigned read_delay;
 } flash_opts_t;
-
-static const char *argv0;
-
-__attribute__((__format__(__printf__, 1, 2)))
-static void error(const char *fmt, ...)
-{
-	int saved_errno;
-	va_list ap;
-
-	saved_errno = errno;
-
-	fflush(stdout);
-	fflush(stderr);
-
-	while (*fmt == '\n') {
-		fputc('\n', stderr);
-		++fmt;
-	}
-
-	fprintf(stderr, "%s: ", argv0);
-
-	errno = saved_errno;
-
-	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
-	va_end(ap);
-
-	fputc('\n', stderr);
-}
-
-__attribute__((__noreturn__, __always_inline__, __format__(__printf__, 1, 2)))
-static inline void die(const char *fmt, ...)
-{
-	error(fmt, __builtin_va_arg_pack());
-
-	exit(EXIT_FAILURE);
-}
-
-__attribute__((__noreturn__, __always_inline__, __format__(__printf__, 1, 2)))
-static inline void die_suggest_help(const char *fmt, ...)
-{
-	if (fmt)
-		error(fmt, __builtin_va_arg_pack());
-
-	die("try the --help option for usage information");
-}
-
-__attribute__((__noreturn__))
-static void die_of_unrecognized_arg(const char *opt, const char *arg)
-{
-	die("unrecognized argument '%s' for option '--%s'", arg, opt);
-}
-
-static int parse_uint_option(const char *opt, const char *arg, int max, int def)
-{
-	unsigned long val;
-	char *end;
-
-	if (!arg) {
-		if (def < 0)
-			die("missing argument for option '--%s'", opt);
-
-		return def;
-	}
-
-	val = strtoul(arg, &end, 10);
-
-	if (*arg == '\0' || *end != '\0')
-		die("invalid argument '%s' for integer option '--%s'", arg,
-		    opt);
-	else if (max >= 0 && val > max)
-		die("value %s of option '--%s' exceeds maximum value %i", arg,
-		    opt, max);
-
-	return val;
-}
-
-static bool parse_bool_option(const char *opt, const char *arg)
-{
-	if (!strcasecmp(optarg, "on") || !strcasecmp(optarg, "true") ||
-	    !strcasecmp(optarg, "enable") || !strcmp(optarg, "1"))
-		return true;
-	else if (!strcasecmp(optarg, "off") || !strcasecmp(optarg, "false") ||
-		 !strcasecmp(optarg, "disable") || !strcmp(optarg, "0"))
-		return false;
-	else
-		die_of_unrecognized_arg(opt, arg);
-}
-
-static void *xmalloc(size_t size)
-{
-	void *res = malloc(size);
-
-	if (!res)
-		die("out of memory");
-
-	return res;
-}
-
-static char *xstrdup(const char *s)
-{
-	char *res = strdup(s);
-
-	if (!res)
-		die("out of memory");
-
-	return res;
-}
-
-static void put_unaligned_le16(uint16_t val, void *dst)
-{
-	uint8_t *p = dst;
-
-	*p++ = val;
-	*p++ = val >> 8;
-}
-
-static void put_unaligned_le32(uint32_t val, void *dst)
-{
-	uint8_t *p = dst;
-
-	*p++ = val;
-	*p++ = val >> 8;
-	*p++ = val >> 16;
-	*p++ = val >> 24;
-}
-
-static uint32_t get_unaligned_le32(const void *src)
-{
-	const uint8_t *p = src;
-
-	return p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
-}
-
-static uint32_t crc32(uint32_t crc, const void *_data, uint32_t len)
-{
-	const uint8_t *data = _data;
-
-	if (len & 3)
-		die("length (%u) must be multiple of 4", len);
-
-	for (uint32_t i = 0; i < len; i += 4, data += 4) {
-		crc = crc32_one(crc, data[3]);
-		crc = crc32_one(crc, data[2]);
-		crc = crc32_one(crc, data[1]);
-		crc = crc32_one(crc, data[0]);
-	}
-
-	return crc;
-}
 
 typedef enum {
 	I2C_ADDR_MCU = 0x2a,
@@ -592,6 +431,9 @@ static void print_features(void)
 	_FEAT(BRIGHTNESS_INT)
 	_FEAT(POWEROFF_WAKEUP)
 	_FEAT(CAN_OLD_MESSAGE_API)
+	_FEAT(TRNG)
+	_FEAT(CRYPTO)
+	_FEAT(BOARD_INFO)
 #undef _FEAT
 }
 
@@ -748,17 +590,6 @@ static void get_uptime_wakeup(uint32_t *uptime, uint32_t *wakeup)
 
 	if (wakeup)
 		*wakeup = le32toh(buf[1]);
-}
-
-static void xctime(const time_t *t, char *d)
-{
-	char *n;
-
-	ctime_r(t, d);
-
-	n = strchr(d, '\n');
-	if (n)
-		*n = '\0';
 }
 
 static void print_wakeup_time(uint32_t uptime, uint32_t wakeup,
@@ -1341,23 +1172,6 @@ static void print_reset_selector(void)
 	printf("%u\n", reset);
 }
 
-static int printf_to_file(const char *path, const char *fmt, ...)
-{
-	int fd = open(path, O_WRONLY), res;
-	va_list ap;
-
-	if (fd < 0)
-		return fd;
-
-	va_start(ap, fmt);
-	res = vdprintf(fd, fmt, ap);
-	va_end(ap);
-
-	close(fd);
-
-	return res;
-}
-
 static void unbind_driver(const char *path, const char *unb, const char *name)
 {
 	int res;
@@ -1376,8 +1190,7 @@ static void unbind_drivers(void)
 		      "1-002b", "LEDs");
 	unbind_driver("/sys/bus/platform/devices/gpio-keys/driver/unbind",
 		      "gpio-keys", "front button input");
-	unbind_driver("/sys/bus/i2c/devices/1-002a/driver/unbind",
-		      "1-002a", "MCU");
+	unbind_driver(MCU_SYSFS_PATH "/driver/unbind", "1-002a", "MCU");
 }
 
 static void goto_bootloader(void)
@@ -1841,33 +1654,6 @@ static void check_flashing(const char *image, size_t size,
 		    "%s", msg_bootloader_flash_needs_force);
 }
 
-static char *read_firmware(const char *firmware, size_t *sizep)
-{
-	ssize_t size;
-	char *image;
-	int fd;
-
-	image = xmalloc(FLASH_SIZE);
-
-	if ((fd = open(firmware, O_RDONLY)) < 0)
-		goto err_free;
-
-	if ((size = read(fd, image, FLASH_SIZE)) <= 0)
-		goto err_close;
-
-	close(fd);
-
-	*sizep = size;
-
-	return image;
-
-err_close:
-	close(fd);
-err_free:
-	free(image);
-	return NULL;
-}
-
 static void _flash_firmware(const char *firmware, char *image, size_t size,
 			    const flash_opts_t *opts)
 {
@@ -1907,7 +1693,7 @@ static void flash_firmware(const char *firmware, const flash_opts_t *opts)
 	char *image;
 	size_t size;
 
-	image = read_firmware(firmware, &size);
+	image = read_binary(firmware, &size, FLASH_SIZE);
 	if (!image)
 		die("failed to read firmware %s: %m", firmware);
 
@@ -1927,7 +1713,7 @@ static char *request_firmware(bool bootloader, bool v2_99, uint32_t *featuresp,
 		 v2_99 ? "v2.99/" : "", get_firmware_prefix(),
 		 bootloader ? "boot" : "app");
 
-	image = read_firmware(fw_path, &size);
+	image = read_binary(fw_path, &size, FLASH_SIZE);
 	if (!image || !get_image_info(image, size, NULL, NULL, featuresp,
 				      checksump)) {
 		char *fname = strrchr(fw_path, '/');
@@ -2048,7 +1834,8 @@ static void upgrade(const flash_opts_t *_opts)
 
 static void usage(void)
 {
-	printf("Usage: omnia-mcutool [OPTION]...\n\n");
+	printf("Usage: omnia-mcutool [OPTION]...\n");
+	printf("       omnia-mcutool {subcommand} [arg]\n\n");
 	printf("omnia-mcutool -- Turris Omnia MCU utility\n\n");
 	printf("Options:\n");
 	printf("  -h, --help                   Print this help\n");
@@ -2145,7 +1932,15 @@ static void usage(void)
 	printf(" Miscellaneous options:\n");
 	printf("      --goto-bootloader        Request the MCU firmware to jump to bootloader\n");
 	printf("      --reset-selector         Show selected factory reset level, determined\n"
-	       "                               by how long the rear reset button was held\n");
+	       "                               by how long the rear reset button was held\n\n");
+	printf("Available subcommands if board information is stored in MCU:\n");
+	printf("  serial-number, serial        Print board serial number\n");
+	printf("  mac-address, mac             Print board first MAC address\n\n");
+	printf("Available subcommands if board can sign messages:\n");
+	printf("  public-key, pubkey, key      Print board ECDSA public key\n");
+	printf("  sign [FILE]                  Sign the sha256 hash of file FILE (or standard\n"
+	       "                               input if FILE is not given) with board ECDSA key\n");
+	printf("  sign-hash <HASH>             Sign the sha256 hash HASH with board ECDSA key\n\n");
 }
 
 static const struct option long_options[] = {
@@ -2197,6 +1992,11 @@ int main(int argc, char *argv[])
 
 	argv0 = argv[0];
 
+	if (argc >= 2 && argv[1][0] != '-') {
+		find_and_handle_subcommand(argc, argv);
+		return 0;
+	}
+
 	while (1) {
 		int opt;
 
@@ -2210,7 +2010,7 @@ int main(int argc, char *argv[])
 			exit(EXIT_SUCCESS);
 		case 'V':
 			puts("omnia-mcutool " MCUTOOL_VERSION " (built on " __DATE__ " " __TIME__ ")\n"
-			     "Copyright (C) 2016, 2022, 2023 CZ.NIC, z.s.p.o.\n"
+			     "Copyright (C) 2016, 2022, 2023, 2024 CZ.NIC, z.s.p.o.\n"
 			     "License GPLv2+: GNU GPL version 2 or later.\n"
 			     "This is free software: you are free to change and redistribute it.\n"
 			     "There is NO WARRANTY, to the extent permitted by law.\n\n"

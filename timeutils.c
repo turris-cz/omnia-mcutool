@@ -18,7 +18,6 @@
   along with util-linux; If not, see <http://www.gnu.org/licenses/>.
 ***/
 
-#define _GNU_SOURCE
 #define _XOPEN_SOURCE
 #include <assert.h>
 #include <errno.h>
@@ -30,12 +29,11 @@
 #include <inttypes.h>
 
 #include "timeutils.h"
+#include "utils.h"
 
 #define WHITESPACE " \t\n\r"
 #define TRUE 1
 #define FALSE 0
-
-#define ARRAY_SIZE(x) (sizeof((x)) / sizeof((x)[0]))
 
 #define streq(a,b) (strcmp((a),(b)) == 0)
 

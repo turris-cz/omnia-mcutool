@@ -1,5 +1,5 @@
 /*
- * omnia-mcutool CRC32 for some MCU commands checksumming
+ * omnia-mcutool definitions
  *
  * Copyright (C) 2024 Marek Behún
  *
@@ -8,11 +8,12 @@
  * as published by the Free Software Foundation; either version 2
  * of the License, or (at your option) any later version.
  */
-#ifndef CRC32_H
-#define CRC32_H
+#ifndef DEFS_H
+#define DEFS_H
 
-#include <stdint.h>
+#define MCU_FW_PATH	"/usr/share/omnia-mcu-firmware"
 
-uint32_t crc32(uint32_t crc, const void *_data, uint32_t len);
+#define MCU_SYSFS_PATH	"/sys/bus/i2c/devices/1-002a"
+#define DEBUGFS_DO_SIGN	"/sys/kernel/debug/turris-omnia-mcu/do_sign"
 
-#endif /* CRC32_H */
+#endif /* !DEFS_H */
