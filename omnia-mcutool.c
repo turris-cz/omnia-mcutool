@@ -74,7 +74,10 @@ static const char *argv0;
 __attribute__((__format__(__printf__, 1, 2)))
 static void error(const char *fmt, ...)
 {
+	int saved_errno;
 	va_list ap;
+
+	saved_errno = errno;
 
 	fflush(stdout);
 	fflush(stderr);
@@ -85,6 +88,8 @@ static void error(const char *fmt, ...)
 	}
 
 	fprintf(stderr, "%s: ", argv0);
+
+	errno = saved_errno;
 
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
