@@ -181,7 +181,7 @@ static int _cmd_write_read(i2c_addr_t addr, const void *wbuf, size_t wlen,
 {
 	struct i2c_rdwr_ioctl_data trans;
 	struct i2c_msg msgs[2] = {};
-	int ret, fd, saved_errno;
+	int ret, fd;
 
 	trans.msgs = msgs;
 	trans.nmsgs = 2;
@@ -196,11 +196,8 @@ static int _cmd_write_read(i2c_addr_t addr, const void *wbuf, size_t wlen,
 	fd = open_i2c(addr);
 
 	ret = ioctl(fd, I2C_RDWR, &trans);
-	saved_errno = errno;
 
-	close(fd);
-
-	errno = saved_errno;
+	close_preserve_errno(fd);
 
 	return ret;
 }

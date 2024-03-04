@@ -126,6 +126,15 @@ void xctime(const time_t *t, char *d)
 		*n = '\0';
 }
 
+void close_preserve_errno(int fd)
+{
+	int saved_errno = errno;
+
+	close(fd);
+
+	errno = saved_errno;
+}
+
 int printf_to_file(const char *path, const char *fmt, ...)
 {
 	int fd = open(path, O_WRONLY), res;
@@ -138,7 +147,7 @@ int printf_to_file(const char *path, const char *fmt, ...)
 	res = vdprintf(fd, fmt, ap);
 	va_end(ap);
 
-	close(fd);
+	close_preserve_errno(fd);
 
 	return res;
 }
@@ -164,7 +173,7 @@ char *read_binary(const char *binary, size_t *sizep, size_t max_size)
 	return image;
 
 err_close:
-	close(fd);
+	close_preserve_errno(fd);
 err_free:
 	free(image);
 	return NULL;
@@ -181,16 +190,15 @@ static int read_first_line(const char *path, char buf[static 128])
 		return -1;
 
 	rd = read(fd, buf, 128);
-	if (rd <= 0) {
-		int saved_errno = errno;
 
-		close(fd);
-		errno = rd ? saved_errno : EIO;
+	close_preserve_errno(fd);
+
+	if (rd <= 0) {
+		if (!rd)
+			errno = EIO;
 
 		return -1;
 	}
-
-	close(fd);
 
 	nl = memchr(buf, '\n', rd);
 	if (!nl) {

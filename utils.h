@@ -60,6 +60,8 @@ char *xstrdup(const char *s);
 
 void xctime(const time_t *t, char *d);
 
+void close_preserve_errno(int fd);
+
 int printf_to_file(const char *path, const char *fmt, ...);
 
 char *read_binary(const char *firmware, size_t *sizep, size_t max_size);
