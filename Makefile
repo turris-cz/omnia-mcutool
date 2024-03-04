@@ -1,7 +1,10 @@
 CC = gcc
 CFLAGS += -Wall
 
-override MCUTOOL_VERSION = $(shell git describe --always --dirty --tags)
+MCUTOOL_VERSION ?= $(shell git describe --always --dirty --tags)
+ifeq ($(MCUTOOL_VERSION),)
+	MCUTOOL_VERSION = $(error you need to specify MCUTOOL_VERSION variable)
+endif
 
 CPPFLAGS += -DMCUTOOL_VERSION='"'$(MCUTOOL_VERSION)'"'
 CPPFLAGS += -D_GNU_SOURCE

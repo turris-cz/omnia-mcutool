@@ -61,6 +61,8 @@ The program requires building with GCC. Clang is not tested.
 It depends on OpenSSL's `libcrypto`.
 
 Simply run `make` with the appropriate `CC` and `CFLAGS` settings.
+If not in a git repository, you also need to specify the `MCUTOOL_VERSION`
+variable (it is printed in `omnia-mcutool --version`.
 
 ## License
 
