@@ -158,22 +158,34 @@ char *read_binary(const char *binary, size_t *sizep, size_t max_size)
 	char *image;
 	int fd;
 
+	if ((fd = open(binary, O_RDONLY)) < 0)
+		return NULL;
+
 	image = xmalloc(max_size);
 
-	if ((fd = open(binary, O_RDONLY)) < 0)
+	size = read(fd, image, max_size);
+	if (size == max_size) {
+		char dummy;
+
+		/* if more data is available, file is too large */
+		if (read(fd, &dummy, 1) == 1) {
+			errno = EFBIG;
+			size = -1;
+		}
+	}
+
+	close_preserve_errno(fd);
+
+	if (size <= 0) {
+		if (!size)
+			errno = ENODATA;
 		goto err_free;
-
-	if ((size = read(fd, image, max_size)) <= 0)
-		goto err_close;
-
-	close(fd);
+	}
 
 	*sizep = size;
 
 	return image;
 
-err_close:
-	close_preserve_errno(fd);
 err_free:
 	free(image);
 	return NULL;
