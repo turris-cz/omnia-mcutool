@@ -87,6 +87,14 @@ static uint32_t crc32_one(uint32_t crc, uint8_t byte)
 	return crc;
 }
 
+/*
+ * The MCU firmware uses MCU's CRC engine to compute CRC faster, but it does not
+ * swap bytes of the words it pushes into the engine. (And for backwards
+ * compatibility, we cannot fix this in the MCU firmware.)
+ * This is why the internal loop in this function passes the bytes of the each
+ * word in reverse order. This also means that the length of the buffer needs to
+ * be a multiple of 4.
+ */
 uint32_t crc32(uint32_t crc, const void *_data, uint32_t len)
 {
 	const uint8_t *data = _data;
