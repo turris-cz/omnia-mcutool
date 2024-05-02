@@ -147,7 +147,7 @@ static void handle_subcommand(typeof(subcmds[0]) *cmd, int argc, char *argv[])
 	if (cmd->has_arg == required_argument && argc < 3)
 		die_suggest_help("too few operands for subcommand '%s'",
 				 argv[1]);
-	else if (argc > (cmd->has_arg == required_argument ? 3 : 2))
+	else if (argc > (cmd->has_arg == no_argument ? 2 : 3))
 		die_suggest_help("too many operands for subcommand '%s'",
 				 argv[1]);
 
