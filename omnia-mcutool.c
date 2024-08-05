@@ -1531,13 +1531,17 @@ static const uint8_t both_message_apis_commit[VERSION_HASHLEN] = {
 	0x96, 0x26, 0x87, 0xf7, 0x6d, 0x8d, 0x14, 0x2f, 0xd1, 0xe2,
 };
 
+static void get_version_or_die(void *dst, bool bootloader)
+{
+	if (get_version(dst, bootloader) < 0)
+		die("cannot get %s version", bootloader ? "bootloader" : "application");
+}
+
 static bool fw_supports_both_message_apis(bool bootloader)
 {
 	uint8_t version[VERSION_HASHLEN];
 
-	if (get_version(version, bootloader) < 0)
-		die("cannot get %s version to check for messaging API",
-		    bootloader ? "bootloader" : "application");
+	get_version_or_die(version, bootloader);
 
 	if (!bootloader) {
 		uint16_t features = get_features();
@@ -1549,6 +1553,91 @@ static bool fw_supports_both_message_apis(bool bootloader)
 	}
 
 	return !memcmp(version, both_message_apis_commit, VERSION_HASHLEN);
+}
+
+/*
+ * These versions of MCU firmware (v2.99 - v4.0) leave enabled some additional
+ * interrupts in NVIC_ISER that old versions of firmware expect to be disabled
+ * (on GD32 MCUs only).
+ */
+static const uint8_t leaves_enabled_interrupts_commits[][VERSION_HASHLEN] = {
+	{ 0xeb, 0x5c, 0x9a, 0x8d, 0xd9, 0xec, 0xa5, 0xd1, 0xdd, 0x71, 0x96, 0x26, 0x87, 0xf7, 0x6d, 0x8d, 0x14, 0x2f, 0xd1, 0xe2 },
+	{ 0x07, 0xeb, 0xa1, 0xfb, 0x7d, 0x18, 0x6f, 0x28, 0x5f, 0x31, 0x94, 0xa8, 0x6f, 0xed, 0xcf, 0xa8, 0x5a, 0xa4, 0x56, 0x8b },
+	{ 0x2b, 0x51, 0x19, 0x3a, 0x58, 0x70, 0xba, 0x23, 0x0a, 0x7f, 0xb7, 0x3b, 0xa1, 0x6f, 0xcf, 0x8a, 0x7f, 0xe2, 0xa2, 0x40 },
+	{ 0xbd, 0xba, 0x68, 0xbb, 0x23, 0x8e, 0xfe, 0x5e, 0x93, 0x44, 0x5f, 0xbc, 0x12, 0x36, 0xea, 0xe9, 0x40, 0x6f, 0x7c, 0xe2 },
+	{ 0x77, 0x66, 0x35, 0x35, 0xa6, 0x4a, 0xfa, 0xbf, 0xd0, 0x79, 0x55, 0x10, 0x95, 0xf3, 0xcc, 0x6e, 0xa3, 0x79, 0x16, 0xf9 },
+
+	/* these are both v3.4, the second one is incorrect but was released as such */
+	{ 0x33, 0x09, 0xbb, 0xfd, 0xa6, 0x7c, 0x34, 0xd3, 0x6d, 0xe9, 0x70, 0xe4, 0xe3, 0xe8, 0xc1, 0xe4, 0x89, 0x9c, 0xc4, 0x0c },
+	{ 0x67, 0xed, 0xdc, 0x95, 0x40, 0x52, 0x6d, 0x0a, 0x9d, 0x96, 0x60, 0xf7, 0xa7, 0x86, 0x7a, 0xf9, 0xa2, 0x8a, 0x68, 0xd6 },
+
+	{ 0xd5, 0x7b, 0x77, 0x46, 0x08, 0x51, 0x5e, 0x37, 0xc2, 0x38, 0x44, 0x77, 0xd2, 0x4a, 0x4d, 0x60, 0xe8, 0x73, 0xec, 0xf1 }
+};
+
+/*
+ * These versions of MCU firmware require disabled interrupts on entry that are
+ * left enabled by the commits above (on GD32 MCUs only.
+ */
+static const uint8_t requires_disabled_interrupts_commits[][VERSION_HASHLEN] = {
+	{ 0x21, 0x74, 0xb5, 0x70, 0xbd, 0x5c, 0x03, 0x8e, 0x83, 0xe7, 0x50, 0x26, 0xa3, 0x0e, 0xb7, 0x25, 0x0b, 0xce, 0x7c, 0xcc }
+};
+
+static bool image_commit_is_one_of(const char *image, size_t size,
+				   const uint8_t (*commits)[VERSION_HASHLEN], size_t n)
+{
+	for (int i = 0; i < n; ++i) {
+		if (memmem(image, size, commits[i], VERSION_HASHLEN) != NULL)
+			return true;
+	}
+
+	return false;
+}
+
+static bool version_is_one_of(bool bootloader,
+			      const uint8_t (*commits)[VERSION_HASHLEN], size_t n)
+{
+	uint8_t version[VERSION_HASHLEN];
+
+	get_version_or_die(version, bootloader);
+
+	for (int i = 0; i < n; ++i) {
+		if (!memcmp(version, commits[i], VERSION_HASHLEN))
+			return true;
+	}
+
+	return false;
+}
+
+static bool fw_leaves_enabled_interrupts(bool bootloader)
+{
+	/* old versions of bootloader do not leave enabled additional interrupts */
+	if (bootloader && get_mcu_proto() == MCU_PROTO_BOOT_OLD)
+		return false;
+
+	return version_is_one_of(bootloader, leaves_enabled_interrupts_commits,
+				 ARRAY_SIZE(leaves_enabled_interrupts_commits));
+}
+
+static bool fw_requires_disabled_interrupts(bool bootloader)
+{
+	/* old versions of bootloader require disabled interrupts on entry */
+	if (bootloader && get_mcu_proto() == MCU_PROTO_BOOT_OLD)
+		return true;
+
+	return version_is_one_of(bootloader, requires_disabled_interrupts_commits,
+				 ARRAY_SIZE(requires_disabled_interrupts_commits));
+}
+
+static bool image_leaves_enabled_interrupts(const char *image, size_t size)
+{
+	return image_commit_is_one_of(image, size, leaves_enabled_interrupts_commits,
+				      ARRAY_SIZE(leaves_enabled_interrupts_commits));
+}
+
+static bool image_requires_disabled_interrupts(const char *image, size_t size)
+{
+	return image_commit_is_one_of(image, size, requires_disabled_interrupts_commits,
+				      ARRAY_SIZE(requires_disabled_interrupts_commits));
 }
 
 static const char *msg_bootloader_flash_needs_force =
@@ -1591,6 +1680,18 @@ static void check_flashing(const char *image, size_t size,
 		die("requested flashing %s but image contains %s!",
 		    opts->bootloader ? "bootloader" : "application",
 		    opts->bootloader ? "application" : "bootloader");
+
+	/* avoid incompatible bootloader + application pairs on GD32 */
+	if (image_mcu_type == STS_MCU_TYPE_GD32 &&
+	    ((image_leaves_enabled_interrupts(image, size) && fw_requires_disabled_interrupts(!opts->bootloader)) ||
+	     (image_requires_disabled_interrupts(image, size) && fw_leaves_enabled_interrupts(!opts->bootloader))))
+		die("the %s firmware currently flashed in the MCU is not\n"
+		    "compatible with the %s firmware you are trying to flash and may cause\n"
+		    "problems during further upgrades.\n\n"
+		    "Please flash newer application firmware (at least version 4.1) or newer\n"
+		    "bootloader firmware (at least version 2.99).",
+		    opts->bootloader ? "application" : "bootloader",
+		    opts->bootloader ? "bootloader" : "application");
 
 	/* in old bootloader we can't read status word */
 	if (get_mcu_proto() == MCU_PROTO_BOOT_OLD) {
