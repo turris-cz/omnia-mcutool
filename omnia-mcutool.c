@@ -358,10 +358,10 @@ static mcu_proto_t _get_mcu_proto(void)
 	} else {
 		/* For older bootloaders, poke bootloader address */
 		int fd = open_i2c(I2C_ADDR_BOOT);
-		uint8_t c;
+		uint32_t c;
 		bool res;
 
-		res = read(fd, &c, 1) == 1;
+		res = read(fd, &c, 4) == 4;
 
 		close(fd);
 
@@ -385,6 +385,100 @@ static mcu_proto_t get_mcu_proto(void)
 	return proto;
 }
 
+static bool is_old_bootloader_with_no_status_word(void)
+{
+	static bool cached, result;
+	uint16_t status;
+
+	if (cached)
+		return result;
+
+	result = get_mcu_proto() == MCU_PROTO_BOOT_OLD &&
+		 cmd_read_mcu(CMD_GET_STATUS_WORD, &status, 2, false);
+	cached = true;
+
+	return result;
+}
+
+static bool is_stm32_heuristic_1(const uint32_t *addrs, size_t n)
+{
+	if (le32toh(addrs[0]) != 0 && le32toh(addrs[0]) != 0xff)
+		return false;
+
+	for (int i = 1; i < n; ++i)
+		if (le32toh(addrs[i]) != 0)
+			return false;
+
+	return true;
+}
+
+static bool is_stm32_heuristic_2(const uint32_t *addrs, size_t n)
+{
+	int valid_addrs = 0;
+
+	for (int i = 0; i < n; ++i) {
+		uint32_t addr = le32toh(addrs[i]);
+
+		if ((addr >> 16) != 0x0800)
+			continue;
+
+		if (addr >= 0x080050c8 && addr < 0x8000f000)
+			valid_addrs++;
+		else
+			return false;
+	}
+
+	return valid_addrs > 5;
+}
+
+static bool is_gd32_heuristic(const uint32_t *addrs, size_t n)
+{
+	static const uint32_t gd32_addrs[32] = {
+		0x20001c00, 0x08002445, 0x08000455, 0x08000457,
+		0x08000459, 0x0800045b, 0x0800045d, 0x00000000,
+		0x00000000, 0x00000000, 0x00000000, 0x0800045f,
+		0x08000461, 0x00000000, 0x08000463, 0x08000465,
+		0x08002491, 0x08002491, 0x08002491, 0x08002491,
+		0x08002491, 0x08002491, 0x08002491, 0x08002491,
+		0x08002491, 0x08002491, 0x08002491, 0x08002491,
+		0x08002491, 0x08002491, 0x00000000, 0x08002491
+	};
+
+	for (int i = 0; i < n; ++i)
+		if (le32toh(addrs[i]) != gd32_addrs[i])
+			return false;
+
+	return true;
+}
+
+static uint8_t determine_mcu_type_from_old_bootloader(void)
+{
+	uint32_t addrs[32];
+	ssize_t res;
+	int fd;
+
+	fd = open_i2c(I2C_ADDR_BOOT);
+
+	res = read(fd, &addrs, sizeof(addrs));
+	if (res >= 0 && res < sizeof(addrs)) {
+		errno = ENXIO;
+		res = -1;
+	}
+	if (res < 0)
+		die("cannot determine MCU type: %m");
+
+	close(fd);
+
+	if (is_gd32_heuristic(addrs, ARRAY_SIZE(addrs)))
+		return STS_MCU_TYPE_GD32;
+
+	if (is_stm32_heuristic_1(addrs, ARRAY_SIZE(addrs)) ||
+	    is_stm32_heuristic_2(addrs, ARRAY_SIZE(addrs)))
+		return STS_MCU_TYPE_STM32;
+
+	die("cannot determine MCU type: heuristic failed.\n\nPlease reboot and try again.");
+}
+
 static uint8_t get_mcu_type(void)
 {
 	static uint8_t mcu_type;
@@ -393,7 +487,11 @@ static uint8_t get_mcu_type(void)
 	if (cached)
 		return mcu_type;
 
-	mcu_type = get_status_word() & STS_MCU_TYPE_MASK;
+	if (is_old_bootloader_with_no_status_word())
+		mcu_type = determine_mcu_type_from_old_bootloader();
+	else
+		mcu_type = get_status_word() & STS_MCU_TYPE_MASK;
+
 	cached = true;
 
 	return mcu_type;
@@ -491,12 +589,28 @@ static void print_features(void)
 #undef _FEAT
 }
 
+static bool get_has_user_regulator(void)
+{
+	static bool cached, result;
+
+	if (cached)
+		return result;
+
+	if (is_old_bootloader_with_no_status_word())
+		result = get_mcu_type() == STS_MCU_TYPE_STM32;
+	else
+		result = !(get_status_word() & STS_USER_REGULATOR_NOT_SUPPORTED);
+
+	cached = true;
+
+	return result;
+}
+
 static const char *get_firmware_prefix(void)
 {
 	static char prefix[32];
 	static bool cached;
 	const char *mcu;
-	bool user_reg;
 	unsigned rev;
 
 	if (cached)
@@ -516,15 +630,15 @@ static const char *get_firmware_prefix(void)
 		return "unknown";
 	}
 
-	user_reg = !(get_status_word() & STS_USER_REGULATOR_NOT_SUPPORTED);
-
-	if (get_features() & FEAT_PERIPH_MCU)
+	if (is_old_bootloader_with_no_status_word())
+		rev = 23;
+	else if (get_features() & FEAT_PERIPH_MCU)
 		rev = 32;
 	else
 		rev = 23;
 
 	snprintf(prefix, sizeof(prefix), "%s-rev%u%s", mcu, rev,
-		 user_reg ? "-user-regulator" : "");
+		 get_has_user_regulator() ? "-user-regulator" : "");
 
 	cached = true;
 
@@ -1706,23 +1820,14 @@ static void check_flashing(const char *image, size_t size,
 		    "Please upgrade the bootloader firmware by running\n"
 		    "  %s --upgrade", argv0);
 
-	/* in old bootloader we can't read status word */
-	if (get_mcu_proto() == MCU_PROTO_BOOT_OLD) {
-		error("WARNING: MCU is executing old version of bootloader, cannot determine all aspects of image validity!");
-	} else {
-		uint16_t status;
+	if (get_mcu_type() != image_mcu_type)
+		die("MCU type is %s but image is for %s!",
+		    mcutype2str(get_mcu_type()), mcutype2str(image_mcu_type));
 
-		if (get_mcu_type() != image_mcu_type)
-			die("MCU type is %s but image is for %s!",
-			    mcutype2str(get_mcu_type()), mcutype2str(image_mcu_type));
-
-		status = get_status_word();
-		if ((status & STS_USER_REGULATOR_NOT_SUPPORTED) !=
-		    ((image_features >> 16) & STS_USER_REGULATOR_NOT_SUPPORTED))
-			die("board %s user regulator but given firmware %s it!",
-			    (status & STS_USER_REGULATOR_NOT_SUPPORTED) ? "does not have" : "has",
-			    (status & STS_USER_REGULATOR_NOT_SUPPORTED) ? "supports" : "does not support");
-	}
+	if (get_has_user_regulator() != !((image_features >> 16) & STS_USER_REGULATOR_NOT_SUPPORTED))
+		die("board %s user regulator but given firmware %s it!",
+		    get_has_user_regulator() ? "has" : "does not have",
+		    get_has_user_regulator() ? "does not support" : "supports");
 
 	image_supports_both_message_apis =
 		((image_features & FEAT_NEW_MESSAGE_API) &&
