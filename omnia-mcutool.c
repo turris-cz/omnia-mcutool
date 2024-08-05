@@ -1693,6 +1693,20 @@ static void check_flashing(const char *image, size_t size,
 		    opts->bootloader ? "application" : "bootloader",
 		    opts->bootloader ? "bootloader" : "application");
 
+	/*
+	 * Request upgrading bootloader if somehow the board ended with
+	 * incompatible bootloader + application pair on GD32.
+	 */
+	if (image_mcu_type == STS_MCU_TYPE_GD32 && !opts->bootloader &&
+	    get_mcu_proto() != MCU_PROTO_BOOT_OLD &&
+	    fw_requires_disabled_interrupts(true) && fw_leaves_enabled_interrupts(false))
+		die("bootloader firmware upgrade is needed!\n\n"
+		    "It seems that a previous upgrade caused the MCU to end up with application\n"
+		    "firmware that is unable to upgrade itself without upgrading the bootloader\n"
+		    "firmware first!\n\n"
+		    "Please upgrade the bootloader firmware by running\n"
+		    "  %s --upgrade", argv0);
+
 	/* in old bootloader we can't read status word */
 	if (get_mcu_proto() == MCU_PROTO_BOOT_OLD) {
 		error("WARNING: MCU is executing old version of bootloader, cannot determine all aspects of image validity!");
@@ -1831,6 +1845,26 @@ static char *request_firmware(bool bootloader, bool v2_99, uint32_t *featuresp,
 	return xstrdup(fw_path);
 }
 
+static void upgrade_bootloader(const flash_opts_t *_opts)
+{
+	flash_opts_t opts = *_opts;
+	char *path, *image;
+	size_t size;
+
+	if (!opts.force)
+		die("further upgrade requires flashing MCU's bootloader firmware.\n\n"
+		    "%s", msg_bootloader_flash_needs_force);
+
+	path = request_firmware(true, false, NULL, NULL, &image, &size);
+
+	opts.bootloader = true;
+	_flash_firmware(path, image, size, &opts);
+	free(image);
+	free(path);
+
+	puts("\nSuccesfully flashed newest bootloader.");
+}
+
 static void upgrade(const flash_opts_t *_opts)
 {
 	uint32_t image_features, image_checksum, checksum;
@@ -1854,6 +1888,14 @@ static void upgrade(const flash_opts_t *_opts)
 		return;
 	}
 
+	/*
+	 * Somehow the board ended with incompatible bootloader + application
+	 * pair on GD32, we first have to upgrade the bootloader.
+	 */
+	if (get_mcu_type() == STS_MCU_TYPE_GD32 && get_mcu_proto() == MCU_PROTO_APP &&
+	    fw_requires_disabled_interrupts(true) && fw_leaves_enabled_interrupts(false))
+		upgrade_bootloader(&opts);
+
 	if (!fw_supports_both_message_apis(true) &&
 	    !(get_bootloader_features() & FEAT_NEW_MESSAGE_API) !=
 	    !(image_features & FEAT_NEW_MESSAGE_API) &&
@@ -1870,22 +1912,7 @@ static void upgrade(const flash_opts_t *_opts)
 			 * If MCU is running application that supports both
 			 * message passing APIs, we can flash newest bootloader.
 			 */
-			char *path, *image;
-			size_t size;
-
-			if (!opts.force)
-				die("further upgrade requires flashing MCU's bootloader firmware.\n"
-				    "%s", msg_bootloader_flash_needs_force);
-
-			path = request_firmware(true, false, NULL, NULL, &image,
-						&size);
-
-			opts.bootloader = true;
-			_flash_firmware(path, image, size, &opts);
-			free(image);
-			free(path);
-
-			puts("\nSuccesfully flashed newest bootloader.");
+			upgrade_bootloader(&opts);
 		} else {
 			/*
 			 * Otherwise we first need to flash application firmware
