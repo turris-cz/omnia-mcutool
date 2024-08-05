@@ -555,21 +555,18 @@ static mcu_proto_t _get_mcu_proto(void)
 	}
 }
 
+static bool mcu_proto_cached;
+
 static mcu_proto_t get_mcu_proto(void)
 {
 	static mcu_proto_t proto;
-	static bool cached;
 
-	if (cached)
+	if (mcu_proto_cached)
 		return proto;
 
 	proto = _get_mcu_proto();
 
-	/* Cache if already in bootloader. If in application, the value
-	 * can change if goto_bootloader() is called.
-	 */
-	if (proto == MCU_PROTO_BOOT_OLD || proto == MCU_PROTO_BOOT_NEW)
-		cached = true;
+	mcu_proto_cached = true;
 
 	return proto;
 }
@@ -1196,6 +1193,7 @@ static void goto_bootloader(void)
 
 	set_control(CTL_BOOTLOADER, CTL_BOOTLOADER);
 	features_cached = false;
+	mcu_proto_cached = false;
 
 	sleep(BOOTLOADER_TRANS_DELAY);
 }
