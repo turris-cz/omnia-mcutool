@@ -1562,10 +1562,10 @@ static void check_flashing(const char *image, size_t size,
 			   const flash_opts_t *opts)
 {
 	bool image_supports_both_message_apis;
-	uint16_t features, status;
 	bool image_is_bootloader;
 	uint32_t image_features;
 	uint8_t image_mcu_type;
+	uint16_t features;
 
 	if (opts->bootloader && !opts->force)
 		die("flashing MCU's bootloader firmware is a dangerous operation!\n"
@@ -1592,31 +1592,23 @@ static void check_flashing(const char *image, size_t size,
 		    opts->bootloader ? "bootloader" : "application",
 		    opts->bootloader ? "application" : "bootloader");
 
-	/* we are in old bootloader */
+	/* in old bootloader we can't read status word */
 	if (get_mcu_proto() == MCU_PROTO_BOOT_OLD) {
-		error("WARNING: MCU is executing old version of bootloader, cannot determine image validity!");
-		return;
+		error("WARNING: MCU is executing old version of bootloader, cannot determine all aspects of image validity!");
+	} else {
+		uint16_t status;
+
+		if (get_mcu_type() != image_mcu_type)
+			die("MCU type is %s but image is for %s!",
+			    mcutype2str(get_mcu_type()), mcutype2str(image_mcu_type));
+
+		status = get_status_word();
+		if ((status & STS_USER_REGULATOR_NOT_SUPPORTED) !=
+		    ((image_features >> 16) & STS_USER_REGULATOR_NOT_SUPPORTED))
+			die("board %s user regulator but given firmware %s it!",
+			    (status & STS_USER_REGULATOR_NOT_SUPPORTED) ? "does not have" : "has",
+			    (status & STS_USER_REGULATOR_NOT_SUPPORTED) ? "supports" : "does not support");
 	}
-
-	if (get_mcu_type() != image_mcu_type)
-		die("MCU type is %s but image is for %s!",
-		    mcutype2str(get_mcu_type()), mcutype2str(image_mcu_type));
-
-	features = get_features();
-	if ((features & FEAT_PERIPH_MCU) && !(image_features & FEAT_PERIPH_MCU))
-		die("board is of revision 32+ but given firmware is not!");
-	else if (!(features & FEAT_PERIPH_MCU) &&
-		 (image_features & FEAT_PERIPH_MCU))
-		die("given firmware is for boards of revision 32+ but the board is older!");
-
-	status = get_status_word();
-	if ((status & STS_USER_REGULATOR_NOT_SUPPORTED) !=
-	    ((image_features >> 16) & STS_USER_REGULATOR_NOT_SUPPORTED))
-		die("board %s user regulator but given firmware %s it!",
-		    (status & STS_USER_REGULATOR_NOT_SUPPORTED) ?
-			"does not have" : "has",
-		    (status & STS_USER_REGULATOR_NOT_SUPPORTED) ?
-			"supports" : "does not support");
 
 	image_supports_both_message_apis =
 		((image_features & FEAT_NEW_MESSAGE_API) &&
@@ -1627,7 +1619,19 @@ static void check_flashing(const char *image, size_t size,
 	if (image_supports_both_message_apis)
 		return;
 
-	if (fw_supports_both_message_apis(!opts->bootloader))
+	/* old bootloader does not support getting features, just say that it is bootloader */
+	if (get_mcu_proto() == MCU_PROTO_BOOT_OLD)
+		features = FEAT_BOOTLOADER;
+	else
+		features = get_features();
+
+	if ((features & FEAT_PERIPH_MCU) && !(image_features & FEAT_PERIPH_MCU))
+		die("board is of revision 32+ but given firmware is not!");
+	else if (!(features & FEAT_PERIPH_MCU) && (image_features & FEAT_PERIPH_MCU))
+		die("given firmware is for boards of revision 32+ but the board is older!");
+
+	if (get_mcu_proto() != MCU_PROTO_BOOT_OLD &&
+	    fw_supports_both_message_apis(!opts->bootloader))
 		return;
 
 	if (!opts->bootloader && !(features & FEAT_BOOTLOADER))
