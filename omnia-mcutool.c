@@ -1657,7 +1657,7 @@ static void check_flashing(const char *image, size_t size,
 	uint16_t features;
 
 	if (opts->bootloader && !opts->force)
-		die("flashing MCU's bootloader firmware is a dangerous operation!\n"
+		die("flashing MCU's bootloader firmware is a dangerous operation!\n\n"
 		    "%s", msg_bootloader_flash_needs_force);
 
 	if (opts->bootloader) {
