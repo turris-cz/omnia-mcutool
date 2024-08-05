@@ -1569,6 +1569,10 @@ static void check_flashing(const char *image, size_t size,
 	uint32_t image_features;
 	uint8_t image_mcu_type;
 
+	if (opts->bootloader && !opts->force)
+		die("flashing MCU's bootloader firmware is a dangerous operation!\n"
+		    "%s", msg_bootloader_flash_needs_force);
+
 	if (opts->bootloader) {
 		if (mcu_proto != MCU_PROTO_APP)
 			die("MCU is already in bootloader, cannot flash bootloader!\n"
@@ -1645,10 +1649,6 @@ static void check_flashing(const char *image, size_t size,
 		   (image_features & FEAT_NEW_MESSAGE_API) ? "new" : "old",
 		   opts->bootloader ? "bootloader" : "application",
 		   opts->bootloader ? "the newest application firmware" : "bootloader firmware v2.99");
-
-	if (opts->bootloader && !opts->force)
-		die("flashing MCU's bootloader firmware is a dangerous operation!\n"
-		    "%s", msg_bootloader_flash_needs_force);
 }
 
 static void _flash_firmware(const char *firmware, char *image, size_t size,
