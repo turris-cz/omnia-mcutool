@@ -1559,7 +1559,7 @@ static const char *msg_bootloader_flash_needs_force =
 	"To proceed, add the --force option. You have been warned!";
 
 static void check_flashing(const char *image, size_t size,
-			   const flash_opts_t *opts, mcu_proto_t mcu_proto)
+			   const flash_opts_t *opts)
 {
 	bool image_supports_both_message_apis;
 	uint16_t features, status;
@@ -1572,7 +1572,7 @@ static void check_flashing(const char *image, size_t size,
 		    "%s", msg_bootloader_flash_needs_force);
 
 	if (opts->bootloader) {
-		if (mcu_proto != MCU_PROTO_APP)
+		if (get_mcu_proto() != MCU_PROTO_APP)
 			die("MCU is already in bootloader, cannot flash bootloader!\n"
 			    "You first need to reboot, or flash application image and\n"
 			    "reboot, and only then flash bootloader.");
@@ -1593,7 +1593,7 @@ static void check_flashing(const char *image, size_t size,
 		    opts->bootloader ? "application" : "bootloader");
 
 	/* we are in old bootloader */
-	if (mcu_proto == MCU_PROTO_BOOT_OLD) {
+	if (get_mcu_proto() == MCU_PROTO_BOOT_OLD) {
 		error("WARNING: MCU is executing old version of bootloader, cannot determine image validity!");
 		return;
 	}
@@ -1652,15 +1652,11 @@ static void check_flashing(const char *image, size_t size,
 static void _flash_firmware(const char *firmware, char *image, size_t size,
 			    const flash_opts_t *opts)
 {
-	mcu_proto_t mcu_proto;
-
-	mcu_proto = get_mcu_proto();
-
-	check_flashing(image, size, opts, mcu_proto);
+	check_flashing(image, size, opts);
 
 	unbind_drivers();
 
-	if (!opts->bootloader && mcu_proto == MCU_PROTO_APP)
+	if (!opts->bootloader && get_mcu_proto() == MCU_PROTO_APP)
 		goto_bootloader();
 
 	printf("File %s (%zd B):\n", firmware, size);
