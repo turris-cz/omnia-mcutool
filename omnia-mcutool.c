@@ -2248,8 +2248,10 @@ int main(int argc, char *argv[])
 			print_version(false);
 			print_mcu_type();
 			print_board_firmware_type();
-			print_features();
-			print_checksum();
+			if (!is_old_bootloader_with_no_status_word()) {
+				print_features();
+				print_checksum();
+			}
 			break;
 		case 'A':
 			do_upgrade = true;
