@@ -543,6 +543,9 @@ static uint16_t get_bootloader_features(void)
 	uint8_t cmd[2] = { CMD_GET_FEATURES, 0xbb };
 	uint16_t features;
 
+	if (is_old_bootloader_with_no_status_word())
+		return FEAT_BOOTLOADER;
+
 	if (!(get_status_word() & STS_FEATURES_SUPPORTED) ||
 	    cmd_write_read_mcu(&cmd, 2, &features, 2, false) < 0)
 		return FEAT_BOOTLOADER;
@@ -1653,6 +1656,9 @@ static void get_version_or_die(void *dst, bool bootloader)
 static bool fw_supports_both_message_apis(bool bootloader)
 {
 	uint8_t version[VERSION_HASHLEN];
+
+	if (bootloader && get_mcu_proto() == MCU_PROTO_BOOT_OLD)
+		return false;
 
 	get_version_or_die(version, bootloader);
 
