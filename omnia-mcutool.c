@@ -1930,11 +1930,11 @@ static void upgrade(const flash_opts_t *_opts)
 			free(image);
 			free(path);
 
-			puts("\n"
-			     "Flashed temporary application firmware needed for further upgrade.\n"
-			     "Please reboot and run\n"
-			     "  omnia-mcutool --upgrade\n"
-			     "again.");
+			printf("\n"
+			       "Flashed temporary application firmware needed for further upgrade.\n"
+			       "Please reboot and run\n"
+			       "  %s --upgrade\n"
+			       "again.", argv0);
 
 			return;
 		}
@@ -1957,8 +1957,8 @@ static void upgrade(const flash_opts_t *_opts)
 
 static void usage(void)
 {
-	printf("Usage: omnia-mcutool [OPTION]...\n");
-	printf("       omnia-mcutool {subcommand} [arg]\n\n");
+	printf("Usage: %s [OPTION]...\n", argv0);
+	printf("       %s {subcommand} [arg]\n\n", argv0);
 	printf("omnia-mcutool -- Turris Omnia MCU utility\n\n");
 	printf("Options:\n");
 	printf("  -h, --help                   Print this help\n");
