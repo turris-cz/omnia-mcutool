@@ -308,6 +308,84 @@ static void set_control(uint8_t bits, uint8_t mask)
 	cmd_write_mcu(&cmd, sizeof(cmd));
 }
 
+static bool features_cached;
+
+static uint16_t get_features(void)
+{
+	static uint16_t features;
+
+	if (features_cached)
+		return features;
+
+	if (get_status_word() & STS_FEATURES_SUPPORTED)
+		cmd_read_mcu(CMD_GET_FEATURES, &features, 2, true);
+	else
+		features = 0;
+
+	features = le16toh(features);
+	features_cached = true;
+
+	return le16toh(features);
+}
+
+typedef enum {
+	MCU_PROTO_APP,
+	MCU_PROTO_BOOT_OLD,
+	MCU_PROTO_BOOT_NEW,
+} mcu_proto_t;
+
+static mcu_proto_t _get_mcu_proto(void)
+{
+	uint16_t status;
+
+	/* Newer bootloaders support CMD_GET_STATUS_WORD and
+	 * CMD_GET_FEATURES, with FEAT_BOOTLOADER bit set.
+	 */
+	if (!cmd_read_mcu(CMD_GET_STATUS_WORD, &status, 2, false)) {
+		uint16_t features;
+
+		status = le16toh(status);
+		if (!(status & STS_FEATURES_SUPPORTED))
+			return MCU_PROTO_APP;
+
+		features = get_features();
+		if (!(features & FEAT_BOOTLOADER))
+			return MCU_PROTO_APP;
+
+		if (features & FEAT_FLASHING)
+			return MCU_PROTO_BOOT_NEW;
+		else
+			return MCU_PROTO_BOOT_OLD;
+	} else {
+		/* For older bootloaders, poke bootloader address */
+		int fd = open_i2c(I2C_ADDR_BOOT);
+		uint8_t c;
+		bool res;
+
+		res = read(fd, &c, 1) == 1;
+
+		close(fd);
+
+		return res ? MCU_PROTO_BOOT_OLD : MCU_PROTO_APP;
+	}
+}
+
+static bool mcu_proto_cached;
+
+static mcu_proto_t get_mcu_proto(void)
+{
+	static mcu_proto_t proto;
+
+	if (mcu_proto_cached)
+		return proto;
+
+	proto = _get_mcu_proto();
+
+	mcu_proto_cached = true;
+
+	return proto;
+}
+
 static uint8_t get_mcu_type(void)
 {
 	static uint8_t mcu_type;
@@ -339,26 +417,6 @@ static void print_mcu_type(void)
 		printf("unknown\n");
 		break;
 	}
-}
-
-static bool features_cached;
-
-static uint16_t get_features(void)
-{
-	static uint16_t features;
-
-	if (features_cached)
-		return features;
-
-	if (get_status_word() & STS_FEATURES_SUPPORTED)
-		cmd_read_mcu(CMD_GET_FEATURES, &features, 2, true);
-	else
-		features = 0;
-
-	features = le16toh(features);
-	features_cached = true;
-
-	return le16toh(features);
 }
 
 static void _assert_feature(uint16_t mask, const char *name)
@@ -511,64 +569,6 @@ static void print_checksum(void)
 
 	printf("Application firmware length: %u Bytes\n", length);
 	printf("Application firmware checksum: %#010x\n", checksum);
-}
-
-typedef enum {
-	MCU_PROTO_APP,
-	MCU_PROTO_BOOT_OLD,
-	MCU_PROTO_BOOT_NEW,
-} mcu_proto_t;
-
-static mcu_proto_t _get_mcu_proto(void)
-{
-	uint16_t status;
-
-	/* Newer bootloaders support CMD_GET_STATUS_WORD and
-	 * CMD_GET_FEATURES, with FEAT_BOOTLOADER bit set.
-	 */
-	if (!cmd_read_mcu(CMD_GET_STATUS_WORD, &status, 2, false)) {
-		uint16_t features;
-
-		status = le16toh(status);
-		if (!(status & STS_FEATURES_SUPPORTED))
-			return MCU_PROTO_APP;
-
-		features = get_features();
-		if (!(features & FEAT_BOOTLOADER))
-			return MCU_PROTO_APP;
-
-		if (features & FEAT_FLASHING)
-			return MCU_PROTO_BOOT_NEW;
-		else
-			return MCU_PROTO_BOOT_OLD;
-	} else {
-		/* For older bootloaders, poke bootloader address */
-		int fd = open_i2c(I2C_ADDR_BOOT);
-		uint8_t c;
-		bool res;
-
-		res = read(fd, &c, 1) == 1;
-
-		close(fd);
-
-		return res ? MCU_PROTO_BOOT_OLD : MCU_PROTO_APP;
-	}
-}
-
-static bool mcu_proto_cached;
-
-static mcu_proto_t get_mcu_proto(void)
-{
-	static mcu_proto_t proto;
-
-	if (mcu_proto_cached)
-		return proto;
-
-	proto = _get_mcu_proto();
-
-	mcu_proto_cached = true;
-
-	return proto;
 }
 
 static void get_uptime_wakeup(uint32_t *uptime, uint32_t *wakeup)
