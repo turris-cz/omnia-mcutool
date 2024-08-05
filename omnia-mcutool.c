@@ -322,7 +322,6 @@ static uint16_t get_features(void)
 	else
 		features = 0;
 
-	features = le16toh(features);
 	features_cached = true;
 
 	return le16toh(features);
