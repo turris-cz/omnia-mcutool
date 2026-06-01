@@ -24,19 +24,19 @@
 #include "utils.h"
 #include "defs.h"
 
-static void print_serial_number(void)
+static void print_serial_number(const char *dummy)
 {
 	print_first_line(MCU_SYSFS_PATH "/serial_number",
 			 "board serial number");
 }
 
-static void print_mac_address(void)
+static void print_mac_address(const char *dummy)
 {
 	print_first_line(MCU_SYSFS_PATH "/first_mac_address",
 			 "board MAC address");
 }
 
-static void print_public_key(void)
+static void print_public_key(const char *dummy)
 {
 	print_first_line(MCU_SYSFS_PATH "/public_key",
 			 "board ECDSA public key");
@@ -123,7 +123,7 @@ static void do_sign_file(const char *path)
 }
 
 static const struct {
-	void (*handler)();
+	void (*handler)(const char *);
 	int has_arg;
 	uint16_t required_features;
 	const char * const *aliases;
@@ -160,7 +160,7 @@ static void handle_subcommand(typeof(subcmds[0]) *cmd, int argc, char *argv[])
 		die("MCU does not support subcommand '%s'", argv[1]);
 
 	if (cmd->has_arg == no_argument)
-		cmd->handler();
+		cmd->handler(NULL);
 	else
 		cmd->handler(argc == 3 ? argv[2] : NULL);
 }
