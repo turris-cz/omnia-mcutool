@@ -50,9 +50,10 @@ https://gitlab.nic.cz/turris/hw/omnia_hw_ctrl/-/releases
 when flashing specific firmware with the `--firmware` option.
 
 The `--upgrade` option tries to automatically find the newest firmware in the
-`/usr/share/omnia-mcu-firmware` directory. It may also need the `v2.99` version
-of the application firmware when upgrading from older firmware - these should be
-in the `/usr/share/omnia-mcu-firmware/v2.99` directory.
+`/usr/share/omnia-mcu-firmware` directory. With application firmware v3.0 to
+v3.3, upgrading from older firmware in the MCU may also need the `v2.99`
+application firmware. It should be in the `/usr/share/omnia-mcu-firmware/v2.99`
+directory. Firmware v3.4 and newer does not need it.
 
 ## Build
 
